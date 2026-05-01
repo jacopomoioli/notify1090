@@ -4,6 +4,7 @@
     "longitude": 2.3522,
     "radius_km": 50,
     "prompt": "Is this aircraft interesting? I care about military aircraft, unusual registrations, private jets of famous companies, or rare aircraft types. Reply with only YES or NO.",
+    "exclude_type_regex": "^(B738|A320|A319|A321)$",
     "poll_interval_seconds": 60,
     "gemini_api_key": "YOUR_GEMINI_API_KEY",
     "telegram_bot_token": "YOUR_TELEGRAM_BOT_TOKEN",

@@ -2,6 +2,7 @@
 import json
 import logging
 import math
+import re
 import sqlite3
 import sys
 import time
@@ -186,6 +187,11 @@ def run(conf_path, notify_all=False):
     ttl_seconds = int(conf.get("seen_ttl_hours", 1) * 3600)
     log.info("TTL: aircraft re-evaluated after %dm", ttl_seconds // 60)
 
+    exclude_pattern = None
+    if conf.get("exclude_type_regex"):
+        exclude_pattern = re.compile(conf["exclude_type_regex"], re.IGNORECASE)
+        log.info("exclude regex: %s", conf["exclude_type_regex"])
+
     poll_count = 0
     fail_streak = 0
     while True:
@@ -211,6 +217,11 @@ def run(conf_path, notify_all=False):
                 dist = ac.get("_distance_km", "?")
                 alt = ac.get("alt_baro", ac.get("altitude", "?"))
                 label = f"{hex_code} {callsign} ({reg}/{type_code}) {dist} km  {alt} ft"
+
+                if exclude_pattern and exclude_pattern.match(ac.get("t", "")):
+                    log.info("exclude %s", label)
+                    db_mark_seen(conn, hex_code)
+                    continue
 
                 db_mark_seen(conn, hex_code)
                 ac_text = format_aircraft_text(ac)
