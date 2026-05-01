@@ -57,13 +57,17 @@ def db_init(conn):
     """)
     conn.commit()
 
-def db_is_known(conn, hex_code):
-    row = conn.execute("SELECT 1 FROM seen_aircraft WHERE hex = ?", (hex_code,)).fetchone()
+def db_is_known(conn, hex_code, ttl_seconds):
+    cutoff = int(time.time()) - ttl_seconds
+    row = conn.execute(
+        "SELECT 1 FROM seen_aircraft WHERE hex = ? AND first_seen > ?",
+        (hex_code, cutoff)
+    ).fetchone()
     return row is not None
 
 def db_mark_seen(conn, hex_code):
     conn.execute(
-        "INSERT OR IGNORE INTO seen_aircraft (hex, first_seen) VALUES (?, ?)",
+        "INSERT OR REPLACE INTO seen_aircraft (hex, first_seen) VALUES (?, ?)",
         (hex_code, int(time.time()))
     )
     conn.commit()
@@ -179,6 +183,9 @@ def run(conf_path, notify_all=False):
              conf["tar1090_url"], conf["radius_km"], conf["poll_interval_seconds"],
              "  [notify-all]" if notify_all else "")
 
+    ttl_seconds = int(conf.get("seen_ttl_hours", 1) * 3600)
+    log.info("TTL: aircraft re-evaluated after %dm", ttl_seconds // 60)
+
     poll_count = 0
     fail_streak = 0
     while True:
@@ -186,7 +193,7 @@ def run(conf_path, notify_all=False):
         try:
             aircraft_list = fetch_aircraft(conf["tar1090_url"])
             nearby = filter_nearby(aircraft_list, conf["latitude"], conf["longitude"], conf["radius_km"])
-            new_count = sum(1 for ac in nearby if ac.get("hex") and not db_is_known(conn, ac["hex"]))
+            new_count = sum(1 for ac in nearby if ac.get("hex") and not db_is_known(conn, ac["hex"], ttl_seconds))
             if fail_streak:
                 log.info("poll #%d — recovered after %d failed poll(s)", poll_count, fail_streak)
                 fail_streak = 0
@@ -195,7 +202,7 @@ def run(conf_path, notify_all=False):
 
             for ac in nearby:
                 hex_code = ac.get("hex")
-                if not hex_code or db_is_known(conn, hex_code):
+                if not hex_code or db_is_known(conn, hex_code, ttl_seconds):
                     continue
 
                 callsign = ac.get("flight", "").strip() or "?"

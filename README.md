@@ -30,3 +30,17 @@ And if you want to wipe the seen-aircraft database
 python3 notify1090.py --wipe-db
 ```
 (or you just delete the `notify1090.db` sqlite file)
+
+## Config reference
+
+| Field | Description |
+|---|---|
+| `tar1090_url` | Base URL of your tar1090 instance |
+| `latitude` / `longitude` | Your location |
+| `radius_km` | Notification radius |
+| `prompt` | Natural language description of what you find interesting. Must end with instructions to reply YES or NO only. |
+| `poll_interval_seconds` | How often to poll tar1090 |
+| `seen_ttl_hours` | Hours after a previously seen aircraft is re-evaluated. Default: `1` |
+| `gemini_api_key` | Google AI Studio API key (requires billing enabled) |
+| `telegram_bot_token` | Telegram bot token from @BotFather |
+| `telegram_chat_id` | Your Telegram chat ID |
