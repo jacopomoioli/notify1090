@@ -36,7 +36,7 @@ def http_get_json(url):
     with urllib.request.urlopen(req, timeout=10) as resp:
         return json.loads(resp.read().decode())
 
-def http_post_json(url, payload, headers=None):
+def http_post_json(url, payload, headers=None, timeout=15):
     data = json.dumps(payload).encode()
     req = urllib.request.Request(url, data=data, method="POST")
     req.add_header("Content-Type", "application/json")
@@ -44,7 +44,7 @@ def http_post_json(url, payload, headers=None):
     if headers:
         for k, v in headers.items():
             req.add_header(k, v)
-    with urllib.request.urlopen(req, timeout=15) as resp:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode())
 
 
@@ -113,7 +113,7 @@ def ask_gemini(api_key, user_prompt, aircraft_text):
             "temperature": 0
         }
     }
-    resp = http_post_json(url, payload)
+    resp = http_post_json(url, payload, timeout=30)
     answer = resp["candidates"][0]["content"]["parts"][0]["text"].strip().upper()
     return answer.startswith("YES")
 
