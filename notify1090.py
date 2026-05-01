@@ -19,7 +19,6 @@ DB_PATH = "notify1090.db"
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
 TELEGRAM_URL = "https://api.telegram.org/bot{token}/sendMessage"
 
-# --- helpers ---
 
 def haversine_km(lat1, lon1, lat2, lon2):
     R = 6371.0
@@ -42,7 +41,6 @@ def http_post_json(url, payload, headers=None):
     with urllib.request.urlopen(req, timeout=15) as resp:
         return json.loads(resp.read().decode())
 
-# --- database ---
 
 def db_init(conn):
     conn.execute("""
@@ -64,7 +62,6 @@ def db_mark_seen(conn, hex_code):
     )
     conn.commit()
 
-# --- aircraft ---
 
 def fetch_aircraft(tar1090_url):
     data = http_get_json(tar1090_url + "/data/aircraft.json")
@@ -98,7 +95,6 @@ def format_aircraft_text(ac):
     ]
     return "\n".join(f"{k}: {v}" for k, v in fields)
 
-# --- gemini ---
 
 def ask_gemini(api_key, user_prompt, aircraft_text):
     url = GEMINI_URL + "?key=" + api_key
@@ -117,7 +113,6 @@ def ask_gemini(api_key, user_prompt, aircraft_text):
     answer = resp["candidates"][0]["content"]["parts"][0]["text"].strip().upper()
     return answer.startswith("YES")
 
-# --- telegram ---
 
 def send_telegram(bot_token, chat_id, text):
     url = TELEGRAM_URL.format(token=bot_token)
@@ -131,26 +126,26 @@ def send_telegram(bot_token, chat_id, text):
 def format_telegram_message(ac):
     callsign = ac.get("flight", "").strip() or "unknown"
     reg = ac.get("r", "unknown")
-    type_code = ac.get("t", "unknown")
+    type_code = ac.get("t", "?")
+    desc = ac.get("desc", "")
+    type_str = f"{type_code} — {desc}" if desc else type_code
     alt = ac.get("alt_baro", ac.get("altitude", "?"))
     speed = ac.get("gs", "?")
     dist = ac.get("_distance_km", "?")
-    lat = ac.get("lat", "?")
-    lon = ac.get("lon", "?")
     squawk = ac.get("squawk", "")
 
     lines = [
-        f"<b>Aircraft alert</b>",
-        f"Callsign: <code>{callsign}</code>  Reg: <code>{reg}</code>  Type: <code>{type_code}</code>",
-        f"Alt: {alt} ft  Speed: {speed} kt  Distance: {dist} km",
-        f"Pos: {lat}, {lon}",
+        f"Callsign: <code>{callsign}</code>  Reg: <code>{reg}</code>",
+        f"Type: <code>{type_str}</code>",
+        f"Alt: {f'{round(alt * 0.3048)} m ({alt} ft)' if isinstance(alt, (int, float)) else '?'}  ",
+        f"Speed: {f'{round(speed * 1.852)} km/h ({speed} kt)' if isinstance(speed, (int, float)) else '?'}  ",
+        f"Distance: {dist} km",
     ]
     if squawk:
         lines.append(f"Squawk: {squawk}")
     lines.append(f"https://globe.adsbexchange.com/?icao={ac.get('hex', '')}")
     return "\n".join(lines)
 
-# --- main loop ---
 
 def load_conf(path):
     with open(path) as f:
