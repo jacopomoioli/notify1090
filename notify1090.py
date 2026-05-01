@@ -22,6 +22,9 @@ log.addHandler(_file)
 DB_PATH = "notify1090.db"
 TELEGRAM_URL = "https://api.telegram.org/bot{token}/sendMessage"
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
+ADSBDB_URL = "https://api.adsbdb.com/v0/callsign/{callsign}"
+PLANESPOTTERS_URL = "https://api.planespotters.net/pub/photos/hex/{hex}"
+ADSBEXCHANGE_URL = "https://globe.adsbexchange.com/?icao={hex}"
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
 
@@ -128,9 +131,19 @@ def send_telegram(bot_token, chat_id, text):
     }
     http_post_json(url, payload)
 
+def fetch_flightroute(callsign):
+    try:
+        data = http_get_json(ADSBDB_URL.format(callsign=callsign))
+        route = data.get("response", {}).get("flightroute")
+        if route:
+            return route
+    except Exception as e:
+        log.warning("adsbdb error for %s — %s", callsign, e)
+    return None
+
 def fetch_planespotters_url(hex_code):
     try:
-        data = http_get_json(f"https://api.planespotters.net/pub/photos/hex/{hex_code}")
+        data = http_get_json(PLANESPOTTERS_URL.format(hex=hex_code))
         photos = data.get("photos")
         if photos:
             return photos[0]["thumbnail_large"]["src"]
@@ -139,7 +152,7 @@ def fetch_planespotters_url(hex_code):
         log.warning("planespotters error for %s — %s", hex_code, e)
     return None
 
-def format_telegram_message(ac, planespotters_url=None, eval_failed=False):
+def format_telegram_message(ac, planespotters_url=None, eval_failed=False, route=None):
     callsign = ac.get("flight", "").strip() or "unknown"
     reg = ac.get("r", "unknown")
     type_code = ac.get("t", "?")
@@ -150,14 +163,24 @@ def format_telegram_message(ac, planespotters_url=None, eval_failed=False):
     dist = ac.get("_distance_km", "?")
     squawk = ac.get("squawk", "")
 
+    airline = route.get("airline", {}).get("name", "") if route else ""
+    first_line = f"<b>{airline + ' — ' if airline else ''}{desc or type_code} ({type_code})</b>"
+
     lines = []
     if eval_failed:
         lines.append("⚠️ Custom Evaluation Failed")
     lines += [
-        f"Type: <code>{type_str}</code>",
+        first_line,
         f"Callsign: <code>{callsign}</code>  Reg: <code>{reg}</code>",
-        f"Alt: {f'{round(alt * 0.3048)} m ({alt} ft)' if isinstance(alt, (int, float)) else '?'}  ",
-        f"Speed: {f'{round(speed * 1.852)} km/h ({speed} kt)' if isinstance(speed, (int, float)) else '?'}  ",
+    ]
+    if route:
+        orig = route.get("origin", {})
+        dest = route.get("destination", {})
+        if orig and dest:
+            lines.append(f"Route: {orig.get('iata_code','?')} {orig.get('municipality','?')} → {dest.get('iata_code','?')} {dest.get('municipality','?')}")
+    lines += [
+        f"Alt: {f'{round(alt * 0.3048)} m ({alt} ft)' if isinstance(alt, (int, float)) else '?'}",
+        f"Speed: {f'{round(speed * 1.852)} km/h ({speed} kt)' if isinstance(speed, (int, float)) else '?'}",
         f"Distance: {dist} km",
     ]
     if squawk:
@@ -167,7 +190,7 @@ def format_telegram_message(ac, planespotters_url=None, eval_failed=False):
     if planespotters_url:
         lines.append(f'<a href="{planespotters_url}">&#8203;</a>')
 
-    lines.append(f"https://globe.adsbexchange.com/?icao={ac.get('hex', '')}")
+    lines.append(ADSBEXCHANGE_URL.format(hex=ac.get("hex", "")))
     return "\n".join(lines)
 
 
@@ -243,7 +266,8 @@ def run(conf_path, notify_all=False):
 
                 if interesting:
                     planespotters_url = fetch_planespotters_url(hex_code)
-                    msg = format_telegram_message(ac, planespotters_url, eval_failed=eval_failed)
+                    route = fetch_flightroute(callsign) if callsign != "?" else None
+                    msg = format_telegram_message(ac, planespotters_url, eval_failed=eval_failed, route=route)
                     try:
                         send_telegram(conf["telegram_bot_token"], conf["telegram_chat_id"], msg)
                         log.info("NOTIFY  %s", label)
