@@ -8,12 +8,15 @@ import time
 import urllib.request
 import urllib.error
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-7s  %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+_fmt = logging.Formatter("%(asctime)s  %(levelname)-7s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+_console = logging.StreamHandler()
+_console.setFormatter(_fmt)
+_file = logging.FileHandler("log.txt")
+_file.setFormatter(_fmt)
 log = logging.getLogger("notify1090")
+log.setLevel(logging.INFO)
+log.addHandler(_console)
+log.addHandler(_file)
 
 DB_PATH = "notify1090.db"
 TELEGRAM_URL = "https://api.telegram.org/bot{token}/sendMessage"
