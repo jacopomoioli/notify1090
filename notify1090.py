@@ -16,8 +16,9 @@ logging.basicConfig(
 log = logging.getLogger("notify1090")
 
 DB_PATH = "notify1090.db"
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
 TELEGRAM_URL = "https://api.telegram.org/bot{token}/sendMessage"
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
+UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
 
 def haversine_km(lat1, lon1, lat2, lon2):
@@ -26,8 +27,6 @@ def haversine_km(lat1, lon1, lat2, lon2):
     dlon = math.radians(lon2 - lon1)
     a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-
-UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
 def http_get_json(url):
     req = urllib.request.Request(url, headers={"User-Agent": UA})
@@ -86,16 +85,10 @@ def filter_nearby(aircraft_list, lat, lon, radius_km):
 
 def format_aircraft_text(ac):
     fields = [
-        ("ICAO", ac.get("hex", "?")),
         ("Callsign", ac.get("flight", "").strip() or "unknown"),
         ("Registration", ac.get("r", "unknown")),
-        ("Type", ac.get("t", "unknown")),
-        ("Altitude (ft)", ac.get("alt_baro", ac.get("altitude", "unknown"))),
-        ("Speed (kt)", ac.get("gs", "unknown")),
-        ("Track", ac.get("track", "unknown")),
+        ("Type", ac.get("desc", "unknown")),
         ("Squawk", ac.get("squawk", "unknown")),
-        ("Distance (km)", ac.get("_distance_km", "?")),
-        ("Lat/Lon", f"{ac.get('lat', '?')}, {ac.get('lon', '?')}"),
     ]
     return "\n".join(f"{k}: {v}" for k, v in fields)
 
