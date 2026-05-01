@@ -109,17 +109,20 @@ def ask_gemini(api_key, user_prompt, aircraft_text):
     payload = {
         "contents": [{
             "parts": [{
-                "text": user_prompt + "\n\nAircraft data:\n" + aircraft_text
+                "text": user_prompt + "\n\nReply with YES or NO followed by a colon and a one-line reason. Example: YES: military tanker. or NO: common narrowbody.\n\nAircraft data:\n" + aircraft_text
             }]
         }],
         "generationConfig": {
-            "maxOutputTokens": 10,
+            "maxOutputTokens": 40,
             "temperature": 0
         }
     }
     resp = http_post_json(url, payload, timeout=30)
-    answer = resp["candidates"][0]["content"]["parts"][0]["text"].strip().upper()
-    return answer.startswith("YES")
+    raw = resp["candidates"][0]["content"]["parts"][0]["text"].strip()
+    upper = raw.upper()
+    interesting = upper.startswith("YES")
+    reason = raw[raw.find(":")+1:].strip() if ":" in raw else ""
+    return interesting, reason
 
 
 def send_telegram(bot_token, chat_id, text):
@@ -250,15 +253,16 @@ def run(conf_path, notify_all=False):
                 ac_text = format_aircraft_text(ac)
 
                 eval_failed = False
+                reason = ""
                 if notify_all:
                     interesting = True
                 else:
                     try:
-                        interesting = ask_gemini(conf["gemini_api_key"], conf["prompt"], ac_text)
+                        interesting, reason = ask_gemini(conf["gemini_api_key"], conf["prompt"], ac_text)
                     except Exception as e:
                         log.error("gemini error  %s — %s  retrying...", label, e)
                         try:
-                            interesting = ask_gemini(conf["gemini_api_key"], conf["prompt"], ac_text)
+                            interesting, reason = ask_gemini(conf["gemini_api_key"], conf["prompt"], ac_text)
                         except Exception as e2:
                             log.error("gemini retry failed  %s — %s  sending anyway", label, e2)
                             interesting = True
@@ -270,11 +274,11 @@ def run(conf_path, notify_all=False):
                     msg = format_telegram_message(ac, planespotters_url, eval_failed=eval_failed, route=route)
                     try:
                         send_telegram(conf["telegram_bot_token"], conf["telegram_chat_id"], msg)
-                        log.info("NOTIFY  %s", label)
+                        log.info("NOTIFY  %s%s", label, f"  LLM REASON: {reason}" if reason else "")
                     except Exception as e:
                         log.error("telegram error  %s — %s", label, e)
                 else:
-                    log.info("skip    %s", label)
+                    log.info("skip    %s%s", label, f"  LLM REASON: {reason}" if reason else "")
 
         except urllib.error.URLError as e:
             fail_streak += 1
