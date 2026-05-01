@@ -131,7 +131,7 @@ def fetch_planespotters_url(hex_code):
         log.warning("planespotters error for %s — %s", hex_code, e)
     return None
 
-def format_telegram_message(ac, planespotters_url=None):
+def format_telegram_message(ac, planespotters_url=None, eval_failed=False):
     callsign = ac.get("flight", "").strip() or "unknown"
     reg = ac.get("r", "unknown")
     type_code = ac.get("t", "?")
@@ -143,6 +143,8 @@ def format_telegram_message(ac, planespotters_url=None):
     squawk = ac.get("squawk", "")
 
     lines = []
+    if eval_failed:
+        lines.append("⚠️ Custom Evaluation Failed")
     lines += [
         f"Type: <code>{type_str}</code>",
         f"Callsign: <code>{callsign}</code>  Reg: <code>{reg}</code>",
@@ -203,18 +205,24 @@ def run(conf_path, notify_all=False):
                 db_mark_seen(conn, hex_code)
                 ac_text = format_aircraft_text(ac)
 
+                eval_failed = False
                 if notify_all:
                     interesting = True
                 else:
                     try:
                         interesting = ask_gemini(conf["gemini_api_key"], conf["prompt"], ac_text)
                     except Exception as e:
-                        log.error("gemini error  %s — %s", label, e)
-                        continue
+                        log.error("gemini error  %s — %s  retrying...", label, e)
+                        try:
+                            interesting = ask_gemini(conf["gemini_api_key"], conf["prompt"], ac_text)
+                        except Exception as e2:
+                            log.error("gemini retry failed  %s — %s  sending anyway", label, e2)
+                            interesting = True
+                            eval_failed = True
 
                 if interesting:
                     planespotters_url = fetch_planespotters_url(hex_code)
-                    msg = format_telegram_message(ac, planespotters_url)
+                    msg = format_telegram_message(ac, planespotters_url, eval_failed=eval_failed)
                     try:
                         send_telegram(conf["telegram_bot_token"], conf["telegram_chat_id"], msg)
                         log.info("NOTIFY  %s", label)
