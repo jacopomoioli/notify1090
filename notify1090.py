@@ -27,14 +27,18 @@ def haversine_km(lat1, lon1, lat2, lon2):
     a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
+UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
 def http_get_json(url):
-    with urllib.request.urlopen(url, timeout=10) as resp:
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=10) as resp:
         return json.loads(resp.read().decode())
 
 def http_post_json(url, payload, headers=None):
     data = json.dumps(payload).encode()
     req = urllib.request.Request(url, data=data, method="POST")
     req.add_header("Content-Type", "application/json")
+    req.add_header("User-Agent", UA)
     if headers:
         for k, v in headers.items():
             req.add_header(k, v)
@@ -123,7 +127,18 @@ def send_telegram(bot_token, chat_id, text):
     }
     http_post_json(url, payload)
 
-def format_telegram_message(ac):
+def fetch_planespotters_url(hex_code):
+    try:
+        data = http_get_json(f"https://api.planespotters.net/pub/photos/hex/{hex_code}")
+        photos = data.get("photos")
+        if photos:
+            return photos[0]["thumbnail_large"]["src"]
+        log.info("planespotters — no photos for %s", hex_code)
+    except Exception as e:
+        log.warning("planespotters error for %s — %s", hex_code, e)
+    return None
+
+def format_telegram_message(ac, planespotters_url=None):
     callsign = ac.get("flight", "").strip() or "unknown"
     reg = ac.get("r", "unknown")
     type_code = ac.get("t", "?")
@@ -134,15 +149,21 @@ def format_telegram_message(ac):
     dist = ac.get("_distance_km", "?")
     squawk = ac.get("squawk", "")
 
-    lines = [
-        f"Callsign: <code>{callsign}</code>  Reg: <code>{reg}</code>",
+    lines = []
+    lines += [
         f"Type: <code>{type_str}</code>",
+        f"Callsign: <code>{callsign}</code>  Reg: <code>{reg}</code>",
         f"Alt: {f'{round(alt * 0.3048)} m ({alt} ft)' if isinstance(alt, (int, float)) else '?'}  ",
         f"Speed: {f'{round(speed * 1.852)} km/h ({speed} kt)' if isinstance(speed, (int, float)) else '?'}  ",
         f"Distance: {dist} km",
     ]
     if squawk:
         lines.append(f"Squawk: {squawk}")
+
+    # planespotters url as a white character cuz we care about the picture only, not the url
+    if planespotters_url:
+        lines.append(f'<a href="{planespotters_url}">&#8203;</a>')
+
     lines.append(f"https://globe.adsbexchange.com/?icao={ac.get('hex', '')}")
     return "\n".join(lines)
 
@@ -199,7 +220,8 @@ def run(conf_path, notify_all=False):
                         continue
 
                 if interesting:
-                    msg = format_telegram_message(ac)
+                    planespotters_url = fetch_planespotters_url(hex_code)
+                    msg = format_telegram_message(ac, planespotters_url)
                     try:
                         send_telegram(conf["telegram_bot_token"], conf["telegram_chat_id"], msg)
                         log.info("NOTIFY  %s", label)
