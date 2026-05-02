@@ -41,6 +41,20 @@ python3 notify1090.py --wipe-db
 ```
 (or you just delete the `notify1090.db` sqlite file)
 
+## Logs
+All output goes to stdout and `log.txt` in the working directory, and each line has the timestamp.
+
+- `poll #N`: summary of each poll cycle (total / in radius / new)
+- `NOTIFY`: aircraft flagged and Telegram message sent, followed by the LLM reason
+- `SKIP`: aircraft evaluated but not interesting, followed by the LLM reason
+- `EXCLUDE`: aircraft type matched `exclude_type_regex`, skipped before LLM
+- `EMERGENCY`: squawk 7500/7600/7700 detected, notified immediately bypassing all filters
+- `GEMINI ERROR`: LLM call failed, retrying
+- `GEMINI RETRY FAILED`: LLM timed out twice, aircraft notified anyway
+- `TELEGRAM ERROR`: notification failed to send
+- `PLANESPOTTERS ERROR`: photo lookup failed
+- `ADSBDB ERROR`: route lookup failed
+
 ## Config reference
 
 | Field | Description |

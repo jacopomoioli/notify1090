@@ -27,9 +27,9 @@ PLANESPOTTERS_URL = "https://api.planespotters.net/pub/photos/hex/{hex}"
 ADSBEXCHANGE_URL = "https://globe.adsbexchange.com/?icao={hex}"
 
 EMERGENCY_SQUAWKS = {
-    "7500": "☠️ HIJACK",
-    "7600": "📻 RADIO FAILURE",
-    "7700": "🚨 EMERGENCY",
+    "7500": ("HIJACK",        "☠️ HIJACK"),
+    "7600": ("RADIO FAILURE", "📻 RADIO FAILURE"),
+    "7700": ("EMERGENCY",     "🚨 EMERGENCY"),
 }
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
@@ -147,7 +147,7 @@ def fetch_flightroute(callsign):
         if route:
             return route
     except Exception as e:
-        log.warning("adsbdb error for %s — %s", callsign, e)
+        log.warning("ADSBDB ERROR  %s — %s", callsign, e)
     return None
 
 def fetch_planespotters_url(hex_code):
@@ -156,9 +156,9 @@ def fetch_planespotters_url(hex_code):
         photos = data.get("photos")
         if photos:
             return photos[0]["thumbnail_large"]["src"]
-        log.info("planespotters — no photos for %s", hex_code)
+        log.info("PLANESPOTTERS  no photos for %s", hex_code)
     except Exception as e:
-        log.warning("planespotters error for %s — %s", hex_code, e)
+        log.warning("PLANESPOTTERS ERROR  %s — %s", hex_code, e)
     return None
 
 def format_telegram_message(ac, planespotters_url=None, eval_failed=False, route=None, emergency=None):
@@ -255,19 +255,20 @@ def run(conf_path, notify_all=False):
                 squawk = ac.get("squawk", "")
                 emergency = EMERGENCY_SQUAWKS.get(squawk)
                 if emergency:
-                    log.warning("EMERGENCY %s  squawk=%s  %s", label, squawk, emergency)
+                    log_label, tg_label = emergency
+                    log.warning("EMERGENCY  %s  squawk=%s  %s", label, squawk, log_label)
                     db_mark_seen(conn, hex_code)
                     planespotters_url = fetch_planespotters_url(hex_code)
                     route = fetch_flightroute(callsign) if callsign != "?" else None
-                    msg = format_telegram_message(ac, planespotters_url, route=route, emergency=emergency)
+                    msg = format_telegram_message(ac, planespotters_url, route=route, emergency=tg_label)
                     try:
                         send_telegram(conf["telegram_bot_token"], conf["telegram_chat_id"], msg)
                     except Exception as e:
-                        log.error("telegram error  %s — %s", label, e)
+                        log.error("TELEGRAM ERROR  %s — %s", label, e)
                     continue
 
                 if exclude_pattern and exclude_pattern.match(ac.get("t", "")):
-                    log.info("exclude %s", label)
+                    log.info("EXCLUDE  %s", label)
                     db_mark_seen(conn, hex_code)
                     continue
 
@@ -282,11 +283,11 @@ def run(conf_path, notify_all=False):
                     try:
                         interesting, reason = ask_gemini(conf["gemini_api_key"], conf["prompt"], ac_text)
                     except Exception as e:
-                        log.error("gemini error  %s — %s  retrying...", label, e)
+                        log.error("GEMINI ERROR  %s — %s  retrying...", label, e)
                         try:
                             interesting, reason = ask_gemini(conf["gemini_api_key"], conf["prompt"], ac_text)
                         except Exception as e2:
-                            log.error("gemini retry failed  %s — %s  sending anyway", label, e2)
+                            log.error("GEMINI RETRY FAILED  %s — %s  sending anyway", label, e2)
                             interesting = True
                             eval_failed = True
 
@@ -298,9 +299,9 @@ def run(conf_path, notify_all=False):
                         send_telegram(conf["telegram_bot_token"], conf["telegram_chat_id"], msg)
                         log.info("NOTIFY  %s%s", label, f"  LLM REASON: {reason}" if reason else "")
                     except Exception as e:
-                        log.error("telegram error  %s — %s", label, e)
+                        log.error("TELEGRAM ERROR  %s — %s", label, e)
                 else:
-                    log.info("skip    %s%s", label, f"  LLM REASON: {reason}" if reason else "")
+                    log.info("SKIP  %s%s", label, f"  LLM REASON: {reason}" if reason else "")
 
         except urllib.error.URLError as e:
             fail_streak += 1
