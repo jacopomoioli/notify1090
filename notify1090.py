@@ -195,7 +195,7 @@ def send_ntfy(topic, title, body):
     with urllib.request.urlopen(req, timeout=15) as resp:
         resp.read()
 
-def format_ntfy_message(ac, route=None, emergency=None, eval_failed=False, planespotters_url=None, mlat=False):
+def format_ntfy_message(ac, route=None, emergency=None, eval_failed=False, planespotters_url=None):
     callsign = ac.get("flight", "").strip() or "unknown"
     reg = ac.get("r", "unknown")
     type_code = ac.get("t", "?")
@@ -209,8 +209,6 @@ def format_ntfy_message(ac, route=None, emergency=None, eval_failed=False, plane
     lines = []
     if emergency:
         lines.append(f"## {emergency}")
-    if mlat:
-        lines.append("## 📡 MLAT")
     if eval_failed:
         lines.append("⚠️ **Custom Evaluation Failed**")
     nationality = registration_nationality(reg)
@@ -232,15 +230,14 @@ def format_ntfy_message(ac, route=None, emergency=None, eval_failed=False, plane
     lines.append(f"[ADSBExchange]({ADSBEXCHANGE_URL.format(hex=ac.get('hex', ''))})")
     return "\n".join(lines)
 
-def ntfy_title(ac, route=None, emergency=None, mlat=False):
+def ntfy_title(ac, route=None, emergency=None):
     type_code = ac.get("t", "?")
     desc = ac.get("desc", "")
     airline = route.get("airline", {}).get("name", "") if route else ""
     if emergency:
         _, tg_label = emergency if isinstance(emergency, tuple) else ("", emergency)
         return f"{tg_label} — {desc or type_code}"
-    base = f"{airline + ' — ' if airline else ''}{desc or type_code} ({type_code})"
-    return f"📡 MLAT — {base}" if mlat else base
+    return f"{airline + ' — ' if airline else ''}{desc or type_code} ({type_code})"
 
 def fetch_flightroute(callsign):
     try:
@@ -263,7 +260,7 @@ def fetch_planespotters_url(hex_code):
         log.warning("PLANESPOTTERS ERROR  %s — %s", hex_code, e)
     return None
 
-def format_telegram_message(ac, planespotters_url=None, eval_failed=False, route=None, emergency=None, mlat=False):
+def format_telegram_message(ac, planespotters_url=None, eval_failed=False, route=None, emergency=None):
     callsign = ac.get("flight", "").strip() or "unknown"
     reg = ac.get("r", "unknown")
     type_code = ac.get("t", "?")
@@ -280,8 +277,6 @@ def format_telegram_message(ac, planespotters_url=None, eval_failed=False, route
     lines = []
     if emergency:
         lines.append(f"<b>{emergency}</b>")
-    if mlat:
-        lines.append("<b>📡 MLAT</b>")
     if eval_failed:
         lines.append("⚠️ Custom Evaluation Failed")
     nationality = registration_nationality(reg)
@@ -387,25 +382,7 @@ def run(conf_path, skip_llm=False, notify_all=False):
                             log.error("NTFY ERROR  %s — %s", label, e)
                     continue
 
-                if ac.get("type") == "mlat":
-                    log.warning("MLAT  %s", label)
-                    db_mark_seen(conn, hex_code)
-                    planespotters_url = fetch_planespotters_url(hex_code)
-                    route = fetch_flightroute(callsign) if callsign != "?" else None
-                    if use_telegram:
-                        msg = format_telegram_message(ac, planespotters_url, route=route, mlat=True)
-                        try:
-                            send_telegram(conf["telegram_bot_token"], conf["telegram_chat_id"], msg)
-                        except Exception as e:
-                            log.error("TELEGRAM ERROR  %s — %s", label, e)
-                    if use_ntfy:
-                        try:
-                            send_ntfy(conf["ntfy_topic"], ntfy_title(ac, route, mlat=True), format_ntfy_message(ac, route=route, planespotters_url=planespotters_url, mlat=True))
-                        except Exception as e:
-                            log.error("NTFY ERROR  %s — %s", label, e)
-                    continue
-
-                if not notify_all and exclude_pattern and exclude_pattern.match(ac.get("t", "")):
+if not notify_all and exclude_pattern and exclude_pattern.match(ac.get("t", "")):
                     log.info("EXCLUDE  %s", label)
                     db_mark_seen(conn, hex_code)
                     continue

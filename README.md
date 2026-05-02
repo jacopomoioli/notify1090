@@ -11,11 +11,10 @@ Minimal python script (no extra deps) that polls a [tar1090](https://github.com/
 2) Filter by radius
 3) Skip notification if aircraft already seen
 4) Notify directly if aircraft has emergency squawk
-5) Notify directly if aircraft comes from MLAT
-6) Skip notification if aircraft type matches the exclusion regex 
-7) Skip notification if LLM doesn't think the aircraft is interesting 
-8) Fetch planespotter photo & aircraft route and airlane via adsbdb
-9) Send the telegram/ntfy message
+5) Skip notification if aircraft type matches the exclusion regex 
+6) Skip notification if LLM doesn't think the aircraft is interesting 
+7) Fetch planespotter photo & aircraft route and airlane via adsbdb
+8) Send the telegram/ntfy message
 
 ## Integrations
 - [Telegram](https://telegram.org/) for notifications. Create a bot via [@BotFather](https://t.me/BotFather) and get your chat ID via [@userinfobot](https://t.me/userinfobot). Optional if ntfy is configured.
@@ -87,4 +86,4 @@ grep "LLM REASON" log.txt
 | `gemini_api_key` | Google AI Studio API key (requires billing enabled) |
 | `telegram_bot_token` | Telegram bot token from @BotFather. Optional if `ntfy_topic` is set. |
 | `telegram_chat_id` | Your Telegram chat ID. Required if `telegram_bot_token` is set. |
-| `ntfy_topic` | ntfy topic name (e.g. `my-planes`). Works with ntfy.sh or a self-hosted instance. Optional if Telegram is configured. |
+| `ntfy_topic` | ntfy topic name. Optional if Telegram is configured. |
