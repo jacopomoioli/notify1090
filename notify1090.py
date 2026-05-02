@@ -26,14 +26,57 @@ ADSBDB_URL = "https://api.adsbdb.com/v0/callsign/{callsign}"
 PLANESPOTTERS_URL = "https://api.planespotters.net/pub/photos/hex/{hex}"
 ADSBEXCHANGE_URL = "https://globe.adsbexchange.com/?icao={hex}"
 NTFY_URL = "https://ntfy.sh/{topic}"
+UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
+REGISTRATION_PREFIXES = [
+    ("A6-", "🇦🇪"), ("A7-", "🇶🇦"), ("A9C", "🇧🇭"),
+    ("AP-", "🇵🇰"), ("B-",  "🇨🇳"), ("C-",  "🇨🇦"),
+    ("CC-", "🇨🇱"), ("CN-", "🇲🇦"), ("CS-", "🇵🇹"),
+    ("CU-", "🇨🇺"), ("CX-", "🇺🇾"), ("D-",  "🇩🇪"),
+    ("EC-", "🇪🇸"), ("EI-", "🇮🇪"), ("EK-", "🇦🇲"),
+    ("EP-", "🇮🇷"), ("ER-", "🇲🇩"), ("ES-", "🇪🇪"),
+    ("ET-", "🇪🇹"), ("EW-", "🇧🇾"), ("EX-", "🇰🇬"),
+    ("EY-", "🇹🇯"), ("F-",  "🇫🇷"), ("G-",  "🇬🇧"),
+    ("HA-", "🇭🇺"), ("HB-", "🇨🇭"), ("HC-", "🇪🇨"),
+    ("HH-", "🇭🇹"), ("HI-", "🇩🇴"), ("HK-", "🇨🇴"),
+    ("HL-", "🇰🇷"), ("HP-", "🇵🇦"), ("HR-", "🇭🇳"),
+    ("HS-", "🇹🇭"), ("HZ-", "🇸🇦"), ("I-",  "🇮🇹"),
+    ("JA-", "🇯🇵"), ("JU-", "🇲🇳"), ("JY-", "🇯🇴"),
+    ("LN-", "🇳🇴"), ("LV-", "🇦🇷"), ("LX-", "🇱🇺"),
+    ("LY-", "🇱🇹"), ("LZ-", "🇧🇬"), ("N",   "🇺🇸"),
+    ("OB-", "🇵🇪"), ("OD-", "🇱🇧"), ("OE-", "🇦🇹"),
+    ("OH-", "🇫🇮"), ("OK-", "🇨🇿"), ("OM-", "🇸🇰"),
+    ("OO-", "🇧🇪"), ("OY-", "🇩🇰"), ("P4-", "🇦🇼"),
+    ("PH-", "🇳🇱"), ("PJ-", "🇸🇽"), ("PP-", "🇧🇷"),
+    ("PR-", "🇧🇷"), ("PT-", "🇧🇷"), ("PZ-", "🇸🇷"),
+    ("RA-", "🇷🇺"), ("RF-", "🇷🇺"), ("RP-", "🇵🇭"),
+    ("S2-", "🇧🇩"), ("S5-", "🇸🇮"), ("S7-", "🇸🇨"),
+    ("SE-", "🇸🇪"), ("SP-", "🇵🇱"), ("ST-", "🇸🇩"),
+    ("SU-", "🇪🇬"), ("SX-", "🇬🇷"), ("T7-", "🇸🇲"),
+    ("TC-", "🇹🇷"), ("TF-", "🇮🇸"), ("TG-", "🇬🇹"),
+    ("TI-", "🇨🇷"), ("TJ-", "🇨🇲"), ("TN-", "🇨🇬"),
+    ("TS-", "🇹🇳"), ("TU-", "🇨🇮"), ("TY-", "🇧🇯"),
+    ("TZ-", "🇲🇱"), ("UK-", "🇺🇿"), ("UN-", "🇰🇿"),
+    ("UR-", "🇺🇦"), ("V2-", "🇦🇬"), ("V5-", "🇳🇦"),
+    ("VH-", "🇦🇺"), ("VN-", "🇻🇳"), ("VP-B","🇧🇲"),
+    ("VT-", "🇮🇳"), ("XA-", "🇲🇽"), ("XB-", "🇲🇽"),
+    ("XC-", "🇲🇽"), ("YI-", "🇮🇶"), ("YJ-", "🇻🇺"),
+    ("YK-", "🇸🇾"), ("YL-", "🇱🇻"), ("YR-", "🇷🇴"),
+    ("YU-", "🇷🇸"), ("YV-", "🇻🇪"), ("Z-",  "🇿🇼"),
+    ("ZA-", "🇦🇱"), ("ZK-", "🇳🇿"), ("ZS-", "🇿🇦"),
+]
 
 EMERGENCY_SQUAWKS = {
     "7500": ("HIJACK",        "☠️ HIJACK"),
     "7600": ("RADIO FAILURE", "📻 RADIO FAILURE"),
     "7700": ("EMERGENCY",     "🚨 EMERGENCY"),
 }
-UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
+def registration_nationality(reg):
+    for prefix, country in REGISTRATION_PREFIXES:
+        if reg.upper().startswith(prefix):
+            return country
+    return None
 
 def haversine_km(lat1, lon1, lat2, lon2):
     R = 6371.0
@@ -168,7 +211,8 @@ def format_ntfy_message(ac, route=None, emergency=None, eval_failed=False, plane
         lines.append(f"## {emergency}")
     if eval_failed:
         lines.append("⚠️ **Custom Evaluation Failed**")
-    lines.append(f"Callsign: `{callsign}` · Reg: `{reg}`")
+    nationality = registration_nationality(reg)
+    lines.append(f"Callsign: `{callsign}` · Reg: `{reg}`" + (f" · {nationality}" if nationality else ""))
     if route:
         orig = route.get("origin", {})
         dest = route.get("destination", {})
@@ -235,9 +279,10 @@ def format_telegram_message(ac, planespotters_url=None, eval_failed=False, route
         lines.append(f"<b>{emergency}</b>")
     if eval_failed:
         lines.append("⚠️ Custom Evaluation Failed")
+    nationality = registration_nationality(reg)
     lines += [
         first_line,
-        f"Callsign: <code>{callsign}</code>  Reg: <code>{reg}</code>",
+        f"Callsign: <code>{callsign}</code>  Reg: <code>{reg}</code>" + (f"  {nationality}" if nationality else ""),
     ]
     if route:
         orig = route.get("origin", {})
@@ -332,6 +377,24 @@ def run(conf_path, notify_all=False):
                     if use_ntfy:
                         try:
                             send_ntfy(conf["ntfy_topic"], ntfy_title(ac, route, emergency), format_ntfy_message(ac, route=route, emergency=tg_label, planespotters_url=planespotters_url))
+                        except Exception as e:
+                            log.error("NTFY ERROR  %s — %s", label, e)
+                    continue
+
+                if ac.get("type") == "mlat":
+                    log.warning("MLAT  %s", label)
+                    db_mark_seen(conn, hex_code)
+                    planespotters_url = fetch_planespotters_url(hex_code)
+                    route = fetch_flightroute(callsign) if callsign != "?" else None
+                    if use_telegram:
+                        msg = format_telegram_message(ac, planespotters_url, route=route)
+                        try:
+                            send_telegram(conf["telegram_bot_token"], conf["telegram_chat_id"], msg)
+                        except Exception as e:
+                            log.error("TELEGRAM ERROR  %s — %s", label, e)
+                    if use_ntfy:
+                        try:
+                            send_ntfy(conf["ntfy_topic"], ntfy_title(ac, route), format_ntfy_message(ac, route=route, planespotters_url=planespotters_url))
                         except Exception as e:
                             log.error("NTFY ERROR  %s — %s", label, e)
                     continue

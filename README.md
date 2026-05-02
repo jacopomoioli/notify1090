@@ -2,17 +2,20 @@
 
 Minimal python script (no extra deps) that polls a [tar1090](https://github.com/wiedehopf/tar1090) ADS-B receiver JSON aircraft APIs, filters aircraft within given radius, asks an LLM (Gemini) if that plane is interesting for you using a custom prompt and if it is sends you a notification. 
 
-![Telegram](https://i.imgur.com/wPgYulp.jpeg)
+| Telegram Notification | NTFY Notification |
+|-|-|
+|![Telegram](https://i.imgur.com/52MeXVC.png)|![ntfy](https://i.imgur.com/blphFUS.png)|
 
 ## Filtering Flow
 1) Fetch all aircrafts from tar1090
 2) Filter by radius
 3) Skip notification if aircraft already seen
 4) Notify directly if aircraft has emergency squawk
-5) Skip notification if aircraft type matches the exclusion regex
-6) Skip notification if LLM doesn't think the aircraft is interesting
-7) Fetch planespotter photo & aircraft route and airlane via adsbdb
-8) Send the telegram message
+5) Notify directly if aircraft comes from MLAT
+6) Skip notification if aircraft type matches the exclusion regex
+7) Skip notification if LLM doesn't think the aircraft is interesting
+8) Fetch planespotter photo & aircraft route and airlane via adsbdb
+9) Send the telegram/ntfy message
 
 ## Integrations
 - [Telegram](https://telegram.org/) for notifications. Create a bot via [@BotFather](https://t.me/BotFather) and get your chat ID via [@userinfobot](https://t.me/userinfobot). Optional if ntfy is configured.
