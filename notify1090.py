@@ -25,6 +25,7 @@ GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5
 ADSBDB_URL = "https://api.adsbdb.com/v0/callsign/{callsign}"
 PLANESPOTTERS_URL = "https://api.planespotters.net/pub/photos/hex/{hex}"
 ADSBEXCHANGE_URL = "https://globe.adsbexchange.com/?icao={hex}"
+NTFY_URL = "https://ntfy.sh/{topic}"
 
 EMERGENCY_SQUAWKS = {
     "7500": ("HIJACK",        "☠️ HIJACK"),
@@ -140,6 +141,60 @@ def send_telegram(bot_token, chat_id, text):
     }
     http_post_json(url, payload)
 
+def send_ntfy(topic, title, body):
+    url = NTFY_URL.format(topic=topic)
+    data = body.encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST")
+    req.add_header("Content-Type", "text/plain; charset=utf-8")
+    req.add_header("Title", title.encode("utf-8").decode("latin-1", errors="replace"))
+    req.add_header("Markdown", "yes")
+    req.add_header("User-Agent", UA)
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        resp.read()
+
+def format_ntfy_message(ac, route=None, emergency=None, eval_failed=False, planespotters_url=None):
+    callsign = ac.get("flight", "").strip() or "unknown"
+    reg = ac.get("r", "unknown")
+    type_code = ac.get("t", "?")
+    desc = ac.get("desc", "")
+    alt = ac.get("alt_baro", ac.get("altitude", "?"))
+    speed = ac.get("gs", "?")
+    dist = ac.get("_distance_km", "?")
+    squawk = ac.get("squawk", "")
+    airline = route.get("airline", {}).get("name", "") if route else ""
+
+    lines = []
+    if emergency:
+        lines.append(f"## {emergency}")
+    if eval_failed:
+        lines.append("⚠️ **Custom Evaluation Failed**")
+    lines.append(f"Callsign: `{callsign}` · Reg: `{reg}`")
+    if route:
+        orig = route.get("origin", {})
+        dest = route.get("destination", {})
+        if orig and dest:
+            lines.append(f"{orig.get('iata_code','?')} {orig.get('municipality','?')} → {dest.get('iata_code','?')} {dest.get('municipality','?')}")
+    lines += [
+        f"Alt: {round(alt * 0.3048)} m ({alt} ft)" if isinstance(alt, (int, float)) else "Alt: ?",
+        f"Speed: {round(speed * 1.852)} km/h ({speed} kt)" if isinstance(speed, (int, float)) else "Speed: ?",
+        f"Distance: {dist} km",
+    ]
+    if squawk:
+        lines.append(f"Squawk: {squawk}")
+    if planespotters_url:
+        lines.append(f"![photo]({planespotters_url})")
+    lines.append(f"[ADSBExchange]({ADSBEXCHANGE_URL.format(hex=ac.get('hex', ''))})")
+    return "\n".join(lines)
+
+def ntfy_title(ac, route=None, emergency=None):
+    type_code = ac.get("t", "?")
+    desc = ac.get("desc", "")
+    airline = route.get("airline", {}).get("name", "") if route else ""
+    if emergency:
+        _, tg_label = emergency if isinstance(emergency, tuple) else ("", emergency)
+        return f"{tg_label} — {desc or type_code}"
+    return f"{airline + ' — ' if airline else ''}{desc or type_code} ({type_code})"
+
 def fetch_flightroute(callsign):
     try:
         data = http_get_json(ADSBDB_URL.format(callsign=callsign))
@@ -211,12 +266,20 @@ def load_conf(path):
 
 def run(conf_path, notify_all=False):
     conf = load_conf(conf_path)
+
+    use_telegram = bool(conf.get("telegram_bot_token") and conf.get("telegram_chat_id"))
+    use_ntfy = bool(conf.get("ntfy_topic"))
+    if not use_telegram and not use_ntfy:
+        log.error("no notification channel configured — set telegram_bot_token/telegram_chat_id or ntfy_topic")
+        sys.exit(1)
+    channels = " + ".join(filter(None, ["telegram" if use_telegram else None, "ntfy" if use_ntfy else None]))
+
     conn = sqlite3.connect(DB_PATH)
     db_init(conn)
 
-    log.info("started — tar1090=%s  radius=%d km  interval=%ds%s",
+    log.info("started — tar1090=%s  radius=%d km  interval=%ds  channels=%s%s",
              conf["tar1090_url"], conf["radius_km"], conf["poll_interval_seconds"],
-             "  [notify-all]" if notify_all else "")
+             channels, "  [notify-all]" if notify_all else "")
 
     ttl_seconds = int(conf.get("seen_ttl_hours", 1) * 3600)
     log.info("TTL: aircraft re-evaluated after %dm", ttl_seconds // 60)
@@ -260,11 +323,17 @@ def run(conf_path, notify_all=False):
                     db_mark_seen(conn, hex_code)
                     planespotters_url = fetch_planespotters_url(hex_code)
                     route = fetch_flightroute(callsign) if callsign != "?" else None
-                    msg = format_telegram_message(ac, planespotters_url, route=route, emergency=tg_label)
-                    try:
-                        send_telegram(conf["telegram_bot_token"], conf["telegram_chat_id"], msg)
-                    except Exception as e:
-                        log.error("TELEGRAM ERROR  %s — %s", label, e)
+                    if use_telegram:
+                        msg = format_telegram_message(ac, planespotters_url, route=route, emergency=tg_label)
+                        try:
+                            send_telegram(conf["telegram_bot_token"], conf["telegram_chat_id"], msg)
+                        except Exception as e:
+                            log.error("TELEGRAM ERROR  %s — %s", label, e)
+                    if use_ntfy:
+                        try:
+                            send_ntfy(conf["ntfy_topic"], ntfy_title(ac, route, emergency), format_ntfy_message(ac, route=route, emergency=tg_label, planespotters_url=planespotters_url))
+                        except Exception as e:
+                            log.error("NTFY ERROR  %s — %s", label, e)
                     continue
 
                 if exclude_pattern and exclude_pattern.match(ac.get("t", "")):
@@ -294,12 +363,18 @@ def run(conf_path, notify_all=False):
                 if interesting:
                     planespotters_url = fetch_planespotters_url(hex_code)
                     route = fetch_flightroute(callsign) if callsign != "?" else None
-                    msg = format_telegram_message(ac, planespotters_url, eval_failed=eval_failed, route=route)
-                    try:
-                        send_telegram(conf["telegram_bot_token"], conf["telegram_chat_id"], msg)
-                        log.info("NOTIFY  %s%s", label, f"  LLM REASON: {reason}" if reason else "")
-                    except Exception as e:
-                        log.error("TELEGRAM ERROR  %s — %s", label, e)
+                    log.info("NOTIFY  %s%s", label, f"  LLM REASON: {reason}" if reason else "")
+                    if use_telegram:
+                        msg = format_telegram_message(ac, planespotters_url, eval_failed=eval_failed, route=route)
+                        try:
+                            send_telegram(conf["telegram_bot_token"], conf["telegram_chat_id"], msg)
+                        except Exception as e:
+                            log.error("TELEGRAM ERROR  %s — %s", label, e)
+                    if use_ntfy:
+                        try:
+                            send_ntfy(conf["ntfy_topic"], ntfy_title(ac, route), format_ntfy_message(ac, route=route, eval_failed=eval_failed, planespotters_url=planespotters_url))
+                        except Exception as e:
+                            log.error("NTFY ERROR  %s — %s", label, e)
                 else:
                     log.info("SKIP  %s%s", label, f"  LLM REASON: {reason}" if reason else "")
 

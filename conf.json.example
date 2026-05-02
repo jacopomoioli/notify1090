@@ -4,9 +4,11 @@
     "longitude": 2.3522,
     "radius_km": 50,
     "prompt": "Is this aircraft interesting? I care about military aircraft, unusual registrations, private jets of famous companies, or rare aircraft types. Reply with YES or NO followed by a colon and a one-line reason. Example: YES: military tanker. or NO: common narrowbody.",
-    "exclude_type_regex": "^(B738|A320|A319|A321)$",
     "poll_interval_seconds": 60,
+    "seen_ttl_hours": 1,
+    "exclude_type_regex": "^(B738|A320|A319|A321)$",
     "gemini_api_key": "YOUR_GEMINI_API_KEY",
     "telegram_bot_token": "YOUR_TELEGRAM_BOT_TOKEN",
-    "telegram_chat_id": "YOUR_TELEGRAM_CHAT_ID"
+    "telegram_chat_id": "YOUR_TELEGRAM_CHAT_ID",
+    "ntfy_topic": ""
 }

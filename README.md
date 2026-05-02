@@ -1,6 +1,6 @@
 # notify1090
 
-Minimal python script (no extra deps) that polls a [tar1090](https://github.com/wiedehopf/tar1090) ADS-B receiver JSON aircraft APIs, filters aircraft within given radius, asks an LLM (Gemini) if that plane is interesting for you using a custom prompt and if it is sends you a Telegram notification. 
+Minimal python script (no extra deps) that polls a [tar1090](https://github.com/wiedehopf/tar1090) ADS-B receiver JSON aircraft APIs, filters aircraft within given radius, asks an LLM (Gemini) if that plane is interesting for you using a custom prompt and if it is sends you a notification. 
 
 ![Telegram](https://i.imgur.com/wPgYulp.jpeg)
 
@@ -15,6 +15,8 @@ Minimal python script (no extra deps) that polls a [tar1090](https://github.com/
 8) Send the telegram message
 
 ## Integrations
+- [Telegram](https://telegram.org/) for notifications. Create a bot via [@BotFather](https://t.me/BotFather) and get your chat ID via [@userinfobot](https://t.me/userinfobot). Optional if ntfy is configured.
+- [ntfy](https://ntfy.sh/) for notifications. Optional if Telegram is configured.
 - [tar1090](https://github.com/wiedehopf/tar1090) instance to get aircraft data. I use the one integrated with the excellent [adsb.im](https://adsb.im/home).
 - [Google AI Studio](https://aistudio.google.com/) for the interesting aircraft evaluation. If you want this step an API key is needed, but you can skip this step and get notified for every plane in range using the `--notify-all` option.
 - [Planespotters](https://www.planespotters.net/), for getting the picture of the plane using the telegram link preview. No API key needed, idk if they implement some kind of rate limiting.
@@ -51,7 +53,8 @@ All output goes to stdout and `log.txt` in the working directory, and each line 
 - `EMERGENCY`: squawk 7500/7600/7700 detected, notified immediately bypassing all filters
 - `GEMINI ERROR`: LLM call failed, retrying
 - `GEMINI RETRY FAILED`: LLM timed out twice, aircraft notified anyway
-- `TELEGRAM ERROR`: notification failed to send
+- `TELEGRAM ERROR`: Telegram notification failed to send
+- `NTFY ERROR`: ntfy notification failed to send
 - `PLANESPOTTERS ERROR`: photo lookup failed
 - `ADSBDB ERROR`: route lookup failed
 
@@ -67,5 +70,6 @@ All output goes to stdout and `log.txt` in the working directory, and each line 
 | `seen_ttl_hours` | Hours after a previously seen aircraft is re-evaluated. Default: `1` |
 | `exclude_type_regex` | Optional regex to check against the aircraft type field, to filter boring models before asking to the LLM |
 | `gemini_api_key` | Google AI Studio API key (requires billing enabled) |
-| `telegram_bot_token` | Telegram bot token from @BotFather |
-| `telegram_chat_id` | Your Telegram chat ID |
+| `telegram_bot_token` | Telegram bot token from @BotFather. Optional if `ntfy_topic` is set. |
+| `telegram_chat_id` | Your Telegram chat ID. Required if `telegram_bot_token` is set. |
+| `ntfy_topic` | ntfy topic name (e.g. `my-planes`). Works with ntfy.sh or a self-hosted instance. Optional if Telegram is configured. |
