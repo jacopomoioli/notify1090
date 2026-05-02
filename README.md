@@ -58,6 +58,12 @@ All output goes to stdout and `log.txt` in the working directory, and each line 
 - `PLANESPOTTERS ERROR`: photo lookup failed
 - `ADSBDB ERROR`: route lookup failed
 
+Analyzing the LLM message inside the NOTIFY and SKIP logs could be useful for verifying if the LLM evaluation matches your expectation. You can get all these log lines with
+
+```bash
+grep "LLM REASON" log.txt
+```
+
 ## Config reference
 
 | Field | Description |
