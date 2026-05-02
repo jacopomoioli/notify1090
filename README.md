@@ -12,8 +12,8 @@ Minimal python script (no extra deps) that polls a [tar1090](https://github.com/
 3) Skip notification if aircraft already seen
 4) Notify directly if aircraft has emergency squawk
 5) Notify directly if aircraft comes from MLAT
-6) Skip notification if aircraft type matches the exclusion regex
-7) Skip notification if LLM doesn't think the aircraft is interesting
+6) Skip notification if aircraft type matches the exclusion regex 
+7) Skip notification if LLM doesn't think the aircraft is interesting 
 8) Fetch planespotter photo & aircraft route and airlane via adsbdb
 9) Send the telegram/ntfy message
 
@@ -33,7 +33,13 @@ Copy the `conf.json.example` to `conf.json` and fill it out with your data. Then
 python3 notify1090.py
 ```
 
-If you want to skip the LLM evaluation, run 
+If you want to skip the LLM evaluation but still apply the type exclusion regex, run
+
+```bash
+python3 notify1090.py --skip-llm
+```
+
+If you want to skip both the LLM and the regex filter and get notified for every aircraft in radius, run
 
 ```bash
 python3 notify1090.py --notify-all

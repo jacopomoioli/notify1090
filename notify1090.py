@@ -195,7 +195,7 @@ def send_ntfy(topic, title, body):
     with urllib.request.urlopen(req, timeout=15) as resp:
         resp.read()
 
-def format_ntfy_message(ac, route=None, emergency=None, eval_failed=False, planespotters_url=None):
+def format_ntfy_message(ac, route=None, emergency=None, eval_failed=False, planespotters_url=None, mlat=False):
     callsign = ac.get("flight", "").strip() or "unknown"
     reg = ac.get("r", "unknown")
     type_code = ac.get("t", "?")
@@ -209,6 +209,8 @@ def format_ntfy_message(ac, route=None, emergency=None, eval_failed=False, plane
     lines = []
     if emergency:
         lines.append(f"## {emergency}")
+    if mlat:
+        lines.append("## 📡 MLAT")
     if eval_failed:
         lines.append("⚠️ **Custom Evaluation Failed**")
     nationality = registration_nationality(reg)
@@ -230,14 +232,15 @@ def format_ntfy_message(ac, route=None, emergency=None, eval_failed=False, plane
     lines.append(f"[ADSBExchange]({ADSBEXCHANGE_URL.format(hex=ac.get('hex', ''))})")
     return "\n".join(lines)
 
-def ntfy_title(ac, route=None, emergency=None):
+def ntfy_title(ac, route=None, emergency=None, mlat=False):
     type_code = ac.get("t", "?")
     desc = ac.get("desc", "")
     airline = route.get("airline", {}).get("name", "") if route else ""
     if emergency:
         _, tg_label = emergency if isinstance(emergency, tuple) else ("", emergency)
         return f"{tg_label} — {desc or type_code}"
-    return f"{airline + ' — ' if airline else ''}{desc or type_code} ({type_code})"
+    base = f"{airline + ' — ' if airline else ''}{desc or type_code} ({type_code})"
+    return f"📡 MLAT — {base}" if mlat else base
 
 def fetch_flightroute(callsign):
     try:
@@ -260,7 +263,7 @@ def fetch_planespotters_url(hex_code):
         log.warning("PLANESPOTTERS ERROR  %s — %s", hex_code, e)
     return None
 
-def format_telegram_message(ac, planespotters_url=None, eval_failed=False, route=None, emergency=None):
+def format_telegram_message(ac, planespotters_url=None, eval_failed=False, route=None, emergency=None, mlat=False):
     callsign = ac.get("flight", "").strip() or "unknown"
     reg = ac.get("r", "unknown")
     type_code = ac.get("t", "?")
@@ -277,6 +280,8 @@ def format_telegram_message(ac, planespotters_url=None, eval_failed=False, route
     lines = []
     if emergency:
         lines.append(f"<b>{emergency}</b>")
+    if mlat:
+        lines.append("<b>📡 MLAT</b>")
     if eval_failed:
         lines.append("⚠️ Custom Evaluation Failed")
     nationality = registration_nationality(reg)
@@ -309,7 +314,7 @@ def load_conf(path):
     with open(path) as f:
         return json.load(f)
 
-def run(conf_path, notify_all=False):
+def run(conf_path, skip_llm=False, notify_all=False):
     conf = load_conf(conf_path)
 
     use_telegram = bool(conf.get("telegram_bot_token") and conf.get("telegram_chat_id"))
@@ -322,9 +327,10 @@ def run(conf_path, notify_all=False):
     conn = sqlite3.connect(DB_PATH)
     db_init(conn)
 
+    mode_tag = "  [notify-all]" if notify_all else ("  [skip-llm]" if skip_llm else "")
     log.info("started — tar1090=%s  radius=%d km  interval=%ds  channels=%s%s",
              conf["tar1090_url"], conf["radius_km"], conf["poll_interval_seconds"],
-             channels, "  [notify-all]" if notify_all else "")
+             channels, mode_tag)
 
     ttl_seconds = int(conf.get("seen_ttl_hours", 1) * 3600)
     log.info("TTL: aircraft re-evaluated after %dm", ttl_seconds // 60)
@@ -387,19 +393,19 @@ def run(conf_path, notify_all=False):
                     planespotters_url = fetch_planespotters_url(hex_code)
                     route = fetch_flightroute(callsign) if callsign != "?" else None
                     if use_telegram:
-                        msg = format_telegram_message(ac, planespotters_url, route=route)
+                        msg = format_telegram_message(ac, planespotters_url, route=route, mlat=True)
                         try:
                             send_telegram(conf["telegram_bot_token"], conf["telegram_chat_id"], msg)
                         except Exception as e:
                             log.error("TELEGRAM ERROR  %s — %s", label, e)
                     if use_ntfy:
                         try:
-                            send_ntfy(conf["ntfy_topic"], ntfy_title(ac, route), format_ntfy_message(ac, route=route, planespotters_url=planespotters_url))
+                            send_ntfy(conf["ntfy_topic"], ntfy_title(ac, route, mlat=True), format_ntfy_message(ac, route=route, planespotters_url=planespotters_url, mlat=True))
                         except Exception as e:
                             log.error("NTFY ERROR  %s — %s", label, e)
                     continue
 
-                if exclude_pattern and exclude_pattern.match(ac.get("t", "")):
+                if not notify_all and exclude_pattern and exclude_pattern.match(ac.get("t", "")):
                     log.info("EXCLUDE  %s", label)
                     db_mark_seen(conn, hex_code)
                     continue
@@ -409,7 +415,7 @@ def run(conf_path, notify_all=False):
 
                 eval_failed = False
                 reason = ""
-                if notify_all:
+                if notify_all or skip_llm:
                     interesting = True
                 else:
                     try:
@@ -462,8 +468,10 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="notify1090 — ADS-B aircraft notification bot")
     parser.add_argument("conf", nargs="?", default="conf.json", help="path to conf.json")
+    parser.add_argument("--skip-llm", action="store_true",
+                        help="skip Gemini evaluation but still apply the exclude_type_regex filter")
     parser.add_argument("--notify-all", action="store_true",
-                        help="skip Gemini and send a Telegram alert for every new aircraft")
+                        help="notify every never-seen-before aircraft in radius")
     parser.add_argument("--wipe-db", action="store_true",
                         help="delete all tracked aircraft from the database and exit")
     args = parser.parse_args()
@@ -474,4 +482,4 @@ if __name__ == "__main__":
         conn.close()
         log.info("wiped %d aircraft from %s", count, DB_PATH)
         sys.exit(0)
-    run(args.conf, notify_all=args.notify_all)
+    run(args.conf, skip_llm=args.skip_llm, notify_all=args.notify_all)
