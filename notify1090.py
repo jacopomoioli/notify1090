@@ -382,7 +382,7 @@ def run(conf_path, skip_llm=False, notify_all=False):
                             log.error("NTFY ERROR  %s — %s", label, e)
                     continue
 
-if not notify_all and exclude_pattern and exclude_pattern.match(ac.get("t", "")):
+                if not notify_all and exclude_pattern and exclude_pattern.match(ac.get("t", "")):
                     log.info("EXCLUDE  %s", label)
                     db_mark_seen(conn, hex_code)
                     continue
