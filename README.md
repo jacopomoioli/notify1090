@@ -2,7 +2,7 @@
 
 Minimal python script (no extra deps) that polls a [tar1090](https://github.com/wiedehopf/tar1090) ADS-B receiver JSON aircraft APIs, filters aircraft within given radius, asks an LLM (Gemini) if that plane is interesting for you using a custom prompt and if it is sends you a Telegram notification. 
 
-![Telegram](https://github.com/user-attachments/assets/84cc7c1f-bfd6-4690-8575-eec757649a17)
+![Telegram](https://i.imgur.com/wPgYulp.jpeg)
 
 ## Filtering Flow
 1) Fetch all aircrafts from tar1090
