@@ -2,12 +2,21 @@
 import json
 import logging
 import math
+import os
 import re
 import sqlite3
 import sys
+import tempfile
 import time
 import urllib.request
 import urllib.error
+import uuid
+
+try:
+    from playwright.sync_api import sync_playwright
+    HAS_PLAYWRIGHT = True
+except ImportError:
+    HAS_PLAYWRIGHT = False
 
 _fmt = logging.Formatter("%(asctime)s  %(levelname)-7s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
 _console = logging.StreamHandler()
@@ -21,6 +30,7 @@ log.addHandler(_file)
 
 DB_PATH = "notify1090.db"
 TELEGRAM_URL = "https://api.telegram.org/bot{token}/sendMessage"
+TELEGRAM_PHOTO_URL = "https://api.telegram.org/bot{token}/sendPhoto"
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
 ADSBDB_URL = "https://api.adsbdb.com/v0/callsign/{callsign}"
 PLANESPOTTERS_URL = "https://api.planespotters.net/pub/photos/hex/{hex}"
@@ -260,6 +270,65 @@ def fetch_planespotters_url(hex_code):
         log.warning("PLANESPOTTERS ERROR  %s — %s", hex_code, e)
     return None
 
+def take_tar1090_screenshot(tar1090_url, hex_code, zoom=10, icon_scale=1.0, viewport=640):
+    if not HAS_PLAYWRIGHT:
+        return None
+    vw = viewport
+    vh = vw * 9 // 16
+    url = (
+        f"{tar1090_url.rstrip('/')}/?icao={hex_code}"
+        f"&zoom={zoom}&iconScale={icon_scale}"
+        f"&hideSideBar&hideButtons&altitudeChart=0&screenshot"
+    )
+    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    tmp.close()
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page(viewport={"width": vw, "height": vh})
+            page.goto(url, wait_until="networkidle", timeout=15000)
+            page.wait_for_timeout(3000)
+            page.evaluate("""
+                document.querySelectorAll('#selected_infoblock, #infoblock, #infoblockLeft')
+                    .forEach(el => el.style.display = 'none');
+            """)
+            page.locator("#map_canvas, #map").first.screenshot(path=tmp.name)
+            browser.close()
+        return tmp.name
+    except Exception as e:
+        log.warning("SCREENSHOT ERROR  %s — %s", hex_code, e)
+        os.unlink(tmp.name)
+        return None
+
+def send_telegram_photo(bot_token, chat_id, photo_path):
+    url = TELEGRAM_PHOTO_URL.format(token=bot_token)
+    boundary = uuid.uuid4().hex
+    with open(photo_path, "rb") as f:
+        photo_data = f.read()
+    body = (
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n{chat_id}\r\n".encode()
+        + f"--{boundary}\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"screenshot.png\"\r\nContent-Type: image/png\r\n\r\n".encode()
+        + photo_data
+        + f"\r\n--{boundary}--\r\n".encode()
+    )
+    req = urllib.request.Request(url, data=body, method="POST")
+    req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
+    req.add_header("User-Agent", UA)
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode())
+
+def send_ntfy_image(topic, title, image_path):
+    url = NTFY_URL.format(topic=topic)
+    with open(image_path, "rb") as f:
+        data = f.read()
+    req = urllib.request.Request(url, data=data, method="POST")
+    req.add_header("Content-Type", "image/png")
+    req.add_header("Filename", "screenshot.png")
+    req.add_header("Title", title.encode("utf-8").decode("latin-1", errors="replace"))
+    req.add_header("User-Agent", UA)
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        resp.read()
+
 def format_telegram_message(ac, planespotters_url=None, eval_failed=False, route=None, emergency=None):
     callsign = ac.get("flight", "").strip() or "unknown"
     reg = ac.get("r", "unknown")
@@ -322,6 +391,14 @@ def run(conf_path, skip_llm=False, notify_all=False):
     conn = sqlite3.connect(DB_PATH)
     db_init(conn)
 
+    use_screenshot = bool(conf.get("screenshot", True))
+    sc_zoom     = int(conf.get("screenshot_zoom", 10))
+    sc_scale    = float(conf.get("screenshot_icon_scale", 1.0))
+    sc_viewport = int(conf.get("screenshot_viewport", 640))
+
+    if use_screenshot and not HAS_PLAYWRIGHT:
+        log.warning("playwright not installed — tar1090 screenshots disabled. Run: pip install playwright && playwright install chromium")
+
     mode_tag = "  [notify-all]" if notify_all else ("  [skip-llm]" if skip_llm else "")
     log.info("started — tar1090=%s  radius=%d km  interval=%ds  channels=%s%s",
              conf["tar1090_url"], conf["radius_km"], conf["poll_interval_seconds"],
@@ -369,17 +446,30 @@ def run(conf_path, skip_llm=False, notify_all=False):
                     db_mark_seen(conn, hex_code)
                     planespotters_url = fetch_planespotters_url(hex_code)
                     route = fetch_flightroute(callsign) if callsign != "?" else None
+                    screenshot_path = take_tar1090_screenshot(conf["tar1090_url"], hex_code, sc_zoom, sc_scale, sc_viewport) if use_screenshot else None
                     if use_telegram:
                         msg = format_telegram_message(ac, planespotters_url, route=route, emergency=tg_label)
                         try:
                             send_telegram(conf["telegram_bot_token"], conf["telegram_chat_id"], msg)
                         except Exception as e:
                             log.error("TELEGRAM ERROR  %s — %s", label, e)
+                        if screenshot_path:
+                            try:
+                                send_telegram_photo(conf["telegram_bot_token"], conf["telegram_chat_id"], screenshot_path)
+                            except Exception as e:
+                                log.error("TELEGRAM ERROR  %s — screenshot: %s", label, e)
                     if use_ntfy:
                         try:
                             send_ntfy(conf["ntfy_topic"], ntfy_title(ac, route, emergency), format_ntfy_message(ac, route=route, emergency=tg_label, planespotters_url=planespotters_url))
                         except Exception as e:
                             log.error("NTFY ERROR  %s — %s", label, e)
+                        if screenshot_path:
+                            try:
+                                send_ntfy_image(conf["ntfy_topic"], ntfy_title(ac, route, emergency), screenshot_path)
+                            except Exception as e:
+                                log.error("NTFY ERROR  %s — screenshot: %s", label, e)
+                    if screenshot_path:
+                        os.unlink(screenshot_path)
                     continue
 
                 if not notify_all and exclude_pattern and exclude_pattern.match(ac.get("t", "")):
@@ -409,6 +499,7 @@ def run(conf_path, skip_llm=False, notify_all=False):
                 if interesting:
                     planespotters_url = fetch_planespotters_url(hex_code)
                     route = fetch_flightroute(callsign) if callsign != "?" else None
+                    screenshot_path = take_tar1090_screenshot(conf["tar1090_url"], hex_code, sc_zoom, sc_scale, sc_viewport) if use_screenshot else None
                     log.info("NOTIFY  %s%s", label, f"  LLM REASON: {reason}" if reason else "")
                     if use_telegram:
                         msg = format_telegram_message(ac, planespotters_url, eval_failed=eval_failed, route=route)
@@ -416,11 +507,23 @@ def run(conf_path, skip_llm=False, notify_all=False):
                             send_telegram(conf["telegram_bot_token"], conf["telegram_chat_id"], msg)
                         except Exception as e:
                             log.error("TELEGRAM ERROR  %s — %s", label, e)
+                        if screenshot_path:
+                            try:
+                                send_telegram_photo(conf["telegram_bot_token"], conf["telegram_chat_id"], screenshot_path)
+                            except Exception as e:
+                                log.error("TELEGRAM ERROR  %s — screenshot: %s", label, e)
                     if use_ntfy:
                         try:
                             send_ntfy(conf["ntfy_topic"], ntfy_title(ac, route), format_ntfy_message(ac, route=route, eval_failed=eval_failed, planespotters_url=planespotters_url))
                         except Exception as e:
                             log.error("NTFY ERROR  %s — %s", label, e)
+                        if screenshot_path:
+                            try:
+                                send_ntfy_image(conf["ntfy_topic"], ntfy_title(ac, route), screenshot_path)
+                            except Exception as e:
+                                log.error("NTFY ERROR  %s — screenshot: %s", label, e)
+                    if screenshot_path:
+                        os.unlink(screenshot_path)
                 else:
                     log.info("SKIP  %s%s", label, f"  LLM REASON: {reason}" if reason else "")
 

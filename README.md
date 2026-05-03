@@ -24,6 +24,7 @@ Minimal python script (no extra deps) that polls a [tar1090](https://github.com/
 - [Planespotters](https://www.planespotters.net/), for getting the picture of the plane using the telegram link preview. No API key needed, idk if they implement some kind of rate limiting.
 - [ADSBExchange](https://www.adsbexchange.com/) link is returned for each plane, if you want to keep track of it even if it goes out from your ADS/B receiver range.
 - [adsbdb](https://www.adsbdb.com/) for getting airline and flight route info from the callsign. No API key needed.
+- [Playwright](https://playwright.dev/python/) for taking a tar1090 map screenshot of the aircraft position. Optional — if not installed, screenshots are skipped. Install with `pip install playwright && playwright install chromium`.
 
 ## Usage
 Copy the `conf.json.example` to `conf.json` and fill it out with your data. Then, run 
@@ -81,9 +82,13 @@ grep "LLM REASON" log.txt
 | `radius_km` | Notification radius |
 | `prompt` | Natural language description of what you find interesting. Must end with instructions `Reply with YES or NO followed by a colon and a one-line reason.`. |
 | `poll_interval_seconds` | How often to poll tar1090 |
-| `seen_ttl_hours` | Hours after a previously seen aircraft is re-evaluated. Default: `1` |
+| `seen_ttl_hours` | Hours after a previously seen aircraft is re-evaluated. |
 | `exclude_type_regex` | Optional regex to check against the aircraft type field, to filter boring models before asking to the LLM |
 | `gemini_api_key` | Google AI Studio API key (requires billing enabled) |
 | `telegram_bot_token` | Telegram bot token from @BotFather. Optional if `ntfy_topic` is set. |
 | `telegram_chat_id` | Your Telegram chat ID. Required if `telegram_bot_token` is set. |
 | `ntfy_topic` | ntfy topic name. Optional if Telegram is configured. |
+| `screenshot` | Enable tar1090 position screenshot as a second notification attachment. |
+| `screenshot_zoom` | tar1090 map zoom level for the position screenshot. |
+| `screenshot_icon_scale` | Aircraft icon scale multiplier in the screenshot. |
+| `screenshot_viewport` | Viewport width in px. |
