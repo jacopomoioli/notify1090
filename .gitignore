@@ -4,3 +4,4 @@ __pycache__
 notify1090.db
 log.txt
 log_evaluation_prompt.txt
+*.png
