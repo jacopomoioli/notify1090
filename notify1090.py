@@ -12,11 +12,19 @@ import urllib.request
 import urllib.error
 import uuid
 
+import io
+
 try:
     from playwright.sync_api import sync_playwright
     HAS_PLAYWRIGHT = True
 except ImportError:
     HAS_PLAYWRIGHT = False
+
+try:
+    from PIL import Image
+    HAS_PILLOW = True
+except ImportError:
+    HAS_PILLOW = False
 
 _fmt = logging.Formatter("%(asctime)s  %(levelname)-7s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
 _console = logging.StreamHandler()
@@ -205,16 +213,15 @@ def send_ntfy(topic, title, body):
     with urllib.request.urlopen(req, timeout=15) as resp:
         resp.read()
 
-def format_ntfy_message(ac, route=None, emergency=None, eval_failed=False, planespotters_url=None):
+def format_ntfy_message(ac, route=None, emergency=None, eval_failed=False, planespotters_url=None, tar1090_url=None):
     callsign = ac.get("flight", "").strip() or "unknown"
     reg = ac.get("r", "unknown")
-    type_code = ac.get("t", "?")
-    desc = ac.get("desc", "")
     alt = ac.get("alt_baro", ac.get("altitude", "?"))
     speed = ac.get("gs", "?")
     dist = ac.get("_distance_km", "?")
     squawk = ac.get("squawk", "")
     airline = route.get("airline", {}).get("name", "") if route else ""
+    hex_code = ac.get("hex", "")
 
     lines = []
     if emergency:
@@ -227,7 +234,7 @@ def format_ntfy_message(ac, route=None, emergency=None, eval_failed=False, plane
         orig = route.get("origin", {})
         dest = route.get("destination", {})
         if orig and dest:
-            lines.append(f"{orig.get('iata_code','?')} {orig.get('municipality','?')} → {dest.get('iata_code','?')} {dest.get('municipality','?')}")
+            lines.append(f"{orig.get('iata_code','?')} {orig.get('municipality','?')} -> {dest.get('iata_code','?')} {dest.get('municipality','?')}")
     lines += [
         f"Alt: {round(alt * 0.3048)} m ({alt} ft)" if isinstance(alt, (int, float)) else "Alt: ?",
         f"Speed: {round(speed * 1.852)} km/h ({speed} kt)" if isinstance(speed, (int, float)) else "Speed: ?",
@@ -237,7 +244,11 @@ def format_ntfy_message(ac, route=None, emergency=None, eval_failed=False, plane
         lines.append(f"Squawk: {squawk}")
     if planespotters_url:
         lines.append(f"![photo]({planespotters_url})")
-    lines.append(f"[ADSBExchange]({ADSBEXCHANGE_URL.format(hex=ac.get('hex', ''))})")
+    link_parts = []
+    if tar1090_url:
+        link_parts.append(f"[tar1090]({tar1090_url.rstrip('/')}/?icao={hex_code})")
+    link_parts.append(f"[ADSBExchange]({ADSBEXCHANGE_URL.format(hex=hex_code)})")
+    lines.append("  ".join(link_parts))
     return "\n".join(lines)
 
 def ntfy_title(ac, route=None, emergency=None):
@@ -246,8 +257,8 @@ def ntfy_title(ac, route=None, emergency=None):
     airline = route.get("airline", {}).get("name", "") if route else ""
     if emergency:
         _, tg_label = emergency if isinstance(emergency, tuple) else ("", emergency)
-        return f"{tg_label} — {desc or type_code}"
-    return f"{airline + ' — ' if airline else ''}{desc or type_code} ({type_code})"
+        return f"{tg_label} - {desc or type_code}"
+    return f"{airline + ' - ' if airline else ''}{desc or type_code} ({type_code})"
 
 def fetch_flightroute(callsign):
     try:
@@ -256,7 +267,7 @@ def fetch_flightroute(callsign):
         if route:
             return route
     except Exception as e:
-        log.warning("ADSBDB ERROR  %s — %s", callsign, e)
+        log.warning("ADSBDB ERROR  %s - %s", callsign, e)
     return None
 
 def fetch_planespotters_url(hex_code):
@@ -267,19 +278,15 @@ def fetch_planespotters_url(hex_code):
             return photos[0]["thumbnail_large"]["src"]
         log.info("PLANESPOTTERS  no photos for %s", hex_code)
     except Exception as e:
-        log.warning("PLANESPOTTERS ERROR  %s — %s", hex_code, e)
+        log.warning("PLANESPOTTERS ERROR  %s - %s", hex_code, e)
     return None
 
-def take_tar1090_screenshot(tar1090_url, hex_code, zoom=10, icon_scale=1.0, viewport=640):
+def take_tar1090_screenshot(tar1090_url, hex_code, params="zoom=10&iconScale=1.0&hideSideBar&hideButtons&altitudeChart=0&screenshot", viewport=640):
     if not HAS_PLAYWRIGHT:
         return None
     vw = viewport
     vh = vw * 9 // 16
-    url = (
-        f"{tar1090_url.rstrip('/')}/?icao={hex_code}"
-        f"&zoom={zoom}&iconScale={icon_scale}"
-        f"&hideSideBar&hideButtons&altitudeChart=0&screenshot"
-    )
+    url = f"{tar1090_url.rstrip('/')}/?icao={hex_code}&{params}"
     tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
     tmp.close()
     try:
@@ -296,18 +303,46 @@ def take_tar1090_screenshot(tar1090_url, hex_code, zoom=10, icon_scale=1.0, view
             browser.close()
         return tmp.name
     except Exception as e:
-        log.warning("SCREENSHOT ERROR  %s — %s", hex_code, e)
+        log.warning("SCREENSHOT ERROR  %s - %s", hex_code, e)
         os.unlink(tmp.name)
         return None
 
-def send_telegram_photo(bot_token, chat_id, photo_path):
+def compose_images(planespotters_url, screenshot_path):
+    """Fetch planespotter photo and compose it above the tar1090 screenshot into one image."""
+    if not HAS_PILLOW:
+        return None
+    try:
+        req = urllib.request.Request(planespotters_url, headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            ps_img = Image.open(io.BytesIO(resp.read())).convert("RGB")
+        sc_img = Image.open(screenshot_path).convert("RGB")
+        w = max(ps_img.width, sc_img.width)
+        if ps_img.width != w:
+            ps_img = ps_img.resize((w, int(ps_img.height * w / ps_img.width)), Image.LANCZOS)
+        if sc_img.width != w:
+            sc_img = sc_img.resize((w, int(sc_img.height * w / sc_img.width)), Image.LANCZOS)
+        composed = Image.new("RGB", (w, ps_img.height + sc_img.height))
+        composed.paste(ps_img, (0, 0))
+        composed.paste(sc_img, (0, ps_img.height))
+        tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+        tmp.close()
+        composed.save(tmp.name, "JPEG", quality=85)
+        return tmp.name
+    except Exception as e:
+        log.warning("COMPOSE ERROR  %s", e)
+        return None
+
+def send_telegram_photo(bot_token, chat_id, photo_path, caption=None):
     url = TELEGRAM_PHOTO_URL.format(token=bot_token)
     boundary = uuid.uuid4().hex
     with open(photo_path, "rb") as f:
         photo_data = f.read()
-    body = (
-        f"--{boundary}\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n{chat_id}\r\n".encode()
-        + f"--{boundary}\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"screenshot.png\"\r\nContent-Type: image/png\r\n\r\n".encode()
+    body = f"--{boundary}\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n{chat_id}\r\n".encode()
+    if caption:
+        body += f"--{boundary}\r\nContent-Disposition: form-data; name=\"caption\"\r\n\r\n{caption}\r\n".encode()
+        body += f"--{boundary}\r\nContent-Disposition: form-data; name=\"parse_mode\"\r\n\r\nHTML\r\n".encode()
+    body += (
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"photo.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n".encode()
         + photo_data
         + f"\r\n--{boundary}--\r\n".encode()
     )
@@ -317,31 +352,37 @@ def send_telegram_photo(bot_token, chat_id, photo_path):
     with urllib.request.urlopen(req, timeout=30) as resp:
         return json.loads(resp.read().decode())
 
-def send_ntfy_image(topic, title, image_path):
+def send_ntfy_with_image(topic, title, message, image_path):
+    """Send a single ntfy notification with text (Message header) and image (binary body)."""
     url = NTFY_URL.format(topic=topic)
     with open(image_path, "rb") as f:
         data = f.read()
+    # HTTP headers cannot contain real newlines; ntfy interprets literal \n as line breaks
+    msg_header = "\\n".join(line for line in message.splitlines())
+    msg_header = msg_header.encode("ascii", errors="ignore").decode("ascii")
     req = urllib.request.Request(url, data=data, method="POST")
-    req.add_header("Content-Type", "image/png")
-    req.add_header("Filename", "screenshot.png")
+    req.add_header("Content-Type", "image/jpeg")
+    req.add_header("Filename", "photo.jpg")
     req.add_header("Title", title.encode("utf-8").decode("latin-1", errors="replace"))
+    req.add_header("Message", msg_header)
+    req.add_header("Markdown", "yes")
     req.add_header("User-Agent", UA)
     with urllib.request.urlopen(req, timeout=30) as resp:
         resp.read()
 
-def format_telegram_message(ac, planespotters_url=None, eval_failed=False, route=None, emergency=None):
+def format_telegram_message(ac, planespotters_url=None, eval_failed=False, route=None, emergency=None, embed_photo_link=True, tar1090_url=None):
     callsign = ac.get("flight", "").strip() or "unknown"
     reg = ac.get("r", "unknown")
     type_code = ac.get("t", "?")
     desc = ac.get("desc", "")
-    type_str = f"{type_code} — {desc}" if desc else type_code
     alt = ac.get("alt_baro", ac.get("altitude", "?"))
     speed = ac.get("gs", "?")
     dist = ac.get("_distance_km", "?")
     squawk = ac.get("squawk", "")
+    hex_code = ac.get("hex", "")
 
     airline = route.get("airline", {}).get("name", "") if route else ""
-    first_line = f"<b>{airline + ' — ' if airline else ''}{desc or type_code} ({type_code})</b>"
+    first_line = f"<b>{airline + ' - ' if airline else ''}{desc or type_code} ({type_code})</b>"
 
     lines = []
     if emergency:
@@ -357,7 +398,7 @@ def format_telegram_message(ac, planespotters_url=None, eval_failed=False, route
         orig = route.get("origin", {})
         dest = route.get("destination", {})
         if orig and dest:
-            lines.append(f"Route: {orig.get('iata_code','?')} {orig.get('municipality','?')} → {dest.get('iata_code','?')} {dest.get('municipality','?')}")
+            lines.append(f"Route: {orig.get('iata_code','?')} {orig.get('municipality','?')} -> {dest.get('iata_code','?')} {dest.get('municipality','?')}")
     lines += [
         f"Alt: {f'{round(alt * 0.3048)} m ({alt} ft)' if isinstance(alt, (int, float)) else '?'}",
         f"Speed: {f'{round(speed * 1.852)} km/h ({speed} kt)' if isinstance(speed, (int, float)) else '?'}",
@@ -366,11 +407,15 @@ def format_telegram_message(ac, planespotters_url=None, eval_failed=False, route
     if squawk:
         lines.append(f"Squawk: {squawk}")
 
-    # planespotters url as a white character cuz we care about the picture only, not the url
-    if planespotters_url:
+    # hidden link trick for planespotter preview - skip when photo is sent directly as attachment
+    if planespotters_url and embed_photo_link:
         lines.append(f'<a href="{planespotters_url}">&#8203;</a>')
 
-    lines.append(ADSBEXCHANGE_URL.format(hex=ac.get("hex", "")))
+    link_parts = []
+    if tar1090_url:
+        link_parts.append(f'<a href="{tar1090_url.rstrip("/")}/?icao={hex_code}">tar1090</a>')
+    link_parts.append(f'<a href="{ADSBEXCHANGE_URL.format(hex=hex_code)}">ADSBExchange</a>')
+    lines.append("  ".join(link_parts))
     return "\n".join(lines)
 
 
@@ -384,7 +429,7 @@ def run(conf_path, skip_llm=False, notify_all=False):
     use_telegram = bool(conf.get("telegram_bot_token") and conf.get("telegram_chat_id"))
     use_ntfy = bool(conf.get("ntfy_topic"))
     if not use_telegram and not use_ntfy:
-        log.error("no notification channel configured — set telegram_bot_token/telegram_chat_id or ntfy_topic")
+        log.error("no notification channel configured - set telegram_bot_token/telegram_chat_id or ntfy_topic")
         sys.exit(1)
     channels = " + ".join(filter(None, ["telegram" if use_telegram else None, "ntfy" if use_ntfy else None]))
 
@@ -392,15 +437,16 @@ def run(conf_path, skip_llm=False, notify_all=False):
     db_init(conn)
 
     use_screenshot = bool(conf.get("screenshot", True))
-    sc_zoom     = int(conf.get("screenshot_zoom", 10))
-    sc_scale    = float(conf.get("screenshot_icon_scale", 1.0))
+    sc_params   = conf.get("screenshot_params", "zoom=10&iconScale=1.0&hideSideBar&hideButtons&altitudeChart=0&screenshot")
     sc_viewport = int(conf.get("screenshot_viewport", 640))
 
     if use_screenshot and not HAS_PLAYWRIGHT:
-        log.warning("playwright not installed — tar1090 screenshots disabled. Run: pip install playwright && playwright install chromium")
+        log.warning("playwright not installed - tar1090 screenshots disabled. Run: pip install playwright && playwright install chromium")
+    if use_screenshot and not HAS_PILLOW:
+        log.warning("pillow not installed - composed image disabled. Run: pip install pillow")
 
     mode_tag = "  [notify-all]" if notify_all else ("  [skip-llm]" if skip_llm else "")
-    log.info("started — tar1090=%s  radius=%d km  interval=%ds  channels=%s%s",
+    log.info("started - tar1090=%s  radius=%d km  interval=%ds  channels=%s%s",
              conf["tar1090_url"], conf["radius_km"], conf["poll_interval_seconds"],
              channels, mode_tag)
 
@@ -421,7 +467,7 @@ def run(conf_path, skip_llm=False, notify_all=False):
             nearby = filter_nearby(aircraft_list, conf["latitude"], conf["longitude"], conf["radius_km"])
             new_count = sum(1 for ac in nearby if ac.get("hex") and not db_is_known(conn, ac["hex"], ttl_seconds))
             if fail_streak:
-                log.info("poll #%d — recovered after %d failed poll(s)", poll_count, fail_streak)
+                log.info("poll #%d - recovered after %d failed poll(s)", poll_count, fail_streak)
                 fail_streak = 0
             log.info("poll #%d — %d total / %d in radius / %d new",
                      poll_count, len(aircraft_list), len(nearby), new_count)
@@ -446,28 +492,35 @@ def run(conf_path, skip_llm=False, notify_all=False):
                     db_mark_seen(conn, hex_code)
                     planespotters_url = fetch_planespotters_url(hex_code)
                     route = fetch_flightroute(callsign) if callsign != "?" else None
-                    screenshot_path = take_tar1090_screenshot(conf["tar1090_url"], hex_code, sc_zoom, sc_scale, sc_viewport) if use_screenshot else None
+                    screenshot_path = take_tar1090_screenshot(conf["tar1090_url"], hex_code, sc_params, sc_viewport) if use_screenshot else None
+                    composed_path = compose_images(planespotters_url, screenshot_path) if (planespotters_url and screenshot_path) else None
                     if use_telegram:
-                        msg = format_telegram_message(ac, planespotters_url, route=route, emergency=tg_label)
                         try:
-                            send_telegram(conf["telegram_bot_token"], conf["telegram_chat_id"], msg)
+                            if composed_path:
+                                caption = format_telegram_message(ac, route=route, emergency=tg_label, embed_photo_link=False, tar1090_url=conf["tar1090_url"])
+                                send_telegram_photo(conf["telegram_bot_token"], conf["telegram_chat_id"], composed_path, caption=caption)
+                            elif planespotters_url:
+                                msg = format_telegram_message(ac, planespotters_url, route=route, emergency=tg_label, tar1090_url=conf["tar1090_url"])
+                                send_telegram(conf["telegram_bot_token"], conf["telegram_chat_id"], msg)
+                            elif screenshot_path:
+                                caption = format_telegram_message(ac, route=route, emergency=tg_label, embed_photo_link=False, tar1090_url=conf["tar1090_url"])
+                                send_telegram_photo(conf["telegram_bot_token"], conf["telegram_chat_id"], screenshot_path, caption=caption)
+                            else:
+                                msg = format_telegram_message(ac, route=route, emergency=tg_label, tar1090_url=conf["tar1090_url"])
+                                send_telegram(conf["telegram_bot_token"], conf["telegram_chat_id"], msg)
                         except Exception as e:
-                            log.error("TELEGRAM ERROR  %s — %s", label, e)
-                        if screenshot_path:
-                            try:
-                                send_telegram_photo(conf["telegram_bot_token"], conf["telegram_chat_id"], screenshot_path)
-                            except Exception as e:
-                                log.error("TELEGRAM ERROR  %s — screenshot: %s", label, e)
+                            log.error("TELEGRAM ERROR  %s - %s", label, e)
                     if use_ntfy:
                         try:
-                            send_ntfy(conf["ntfy_topic"], ntfy_title(ac, route, emergency), format_ntfy_message(ac, route=route, emergency=tg_label, planespotters_url=planespotters_url))
+                            image_for_ntfy = composed_path or screenshot_path
+                            if image_for_ntfy:
+                                send_ntfy_with_image(conf["ntfy_topic"], ntfy_title(ac, route, emergency), format_ntfy_message(ac, route=route, emergency=tg_label, tar1090_url=conf["tar1090_url"]), image_for_ntfy)
+                            else:
+                                send_ntfy(conf["ntfy_topic"], ntfy_title(ac, route, emergency), format_ntfy_message(ac, route=route, emergency=tg_label, planespotters_url=planespotters_url, tar1090_url=conf["tar1090_url"]))
                         except Exception as e:
-                            log.error("NTFY ERROR  %s — %s", label, e)
-                        if screenshot_path:
-                            try:
-                                send_ntfy_image(conf["ntfy_topic"], ntfy_title(ac, route, emergency), screenshot_path)
-                            except Exception as e:
-                                log.error("NTFY ERROR  %s — screenshot: %s", label, e)
+                            log.error("NTFY ERROR  %s - %s", label, e)
+                    if composed_path:
+                        os.unlink(composed_path)
                     if screenshot_path:
                         os.unlink(screenshot_path)
                     continue
@@ -488,40 +541,47 @@ def run(conf_path, skip_llm=False, notify_all=False):
                     try:
                         interesting, reason = ask_gemini(conf["gemini_api_key"], conf["prompt"], ac_text)
                     except Exception as e:
-                        log.error("GEMINI ERROR  %s — %s  retrying...", label, e)
+                        log.error("GEMINI ERROR  %s - %s  retrying...", label, e)
                         try:
                             interesting, reason = ask_gemini(conf["gemini_api_key"], conf["prompt"], ac_text)
                         except Exception as e2:
-                            log.error("GEMINI RETRY FAILED  %s — %s  sending anyway", label, e2)
+                            log.error("GEMINI RETRY FAILED  %s - %s  sending anyway", label, e2)
                             interesting = True
                             eval_failed = True
 
                 if interesting:
                     planespotters_url = fetch_planespotters_url(hex_code)
                     route = fetch_flightroute(callsign) if callsign != "?" else None
-                    screenshot_path = take_tar1090_screenshot(conf["tar1090_url"], hex_code, sc_zoom, sc_scale, sc_viewport) if use_screenshot else None
+                    screenshot_path = take_tar1090_screenshot(conf["tar1090_url"], hex_code, sc_params, sc_viewport) if use_screenshot else None
+                    composed_path = compose_images(planespotters_url, screenshot_path) if (planespotters_url and screenshot_path) else None
                     log.info("NOTIFY  %s%s", label, f"  LLM REASON: {reason}" if reason else "")
                     if use_telegram:
-                        msg = format_telegram_message(ac, planespotters_url, eval_failed=eval_failed, route=route)
                         try:
-                            send_telegram(conf["telegram_bot_token"], conf["telegram_chat_id"], msg)
+                            if composed_path:
+                                caption = format_telegram_message(ac, eval_failed=eval_failed, route=route, embed_photo_link=False, tar1090_url=conf["tar1090_url"])
+                                send_telegram_photo(conf["telegram_bot_token"], conf["telegram_chat_id"], composed_path, caption=caption)
+                            elif planespotters_url:
+                                msg = format_telegram_message(ac, planespotters_url, eval_failed=eval_failed, route=route, tar1090_url=conf["tar1090_url"])
+                                send_telegram(conf["telegram_bot_token"], conf["telegram_chat_id"], msg)
+                            elif screenshot_path:
+                                caption = format_telegram_message(ac, eval_failed=eval_failed, route=route, embed_photo_link=False, tar1090_url=conf["tar1090_url"])
+                                send_telegram_photo(conf["telegram_bot_token"], conf["telegram_chat_id"], screenshot_path, caption=caption)
+                            else:
+                                msg = format_telegram_message(ac, eval_failed=eval_failed, route=route, tar1090_url=conf["tar1090_url"])
+                                send_telegram(conf["telegram_bot_token"], conf["telegram_chat_id"], msg)
                         except Exception as e:
-                            log.error("TELEGRAM ERROR  %s — %s", label, e)
-                        if screenshot_path:
-                            try:
-                                send_telegram_photo(conf["telegram_bot_token"], conf["telegram_chat_id"], screenshot_path)
-                            except Exception as e:
-                                log.error("TELEGRAM ERROR  %s — screenshot: %s", label, e)
+                            log.error("TELEGRAM ERROR  %s - %s", label, e)
                     if use_ntfy:
                         try:
-                            send_ntfy(conf["ntfy_topic"], ntfy_title(ac, route), format_ntfy_message(ac, route=route, eval_failed=eval_failed, planespotters_url=planespotters_url))
+                            image_for_ntfy = composed_path or screenshot_path
+                            if image_for_ntfy:
+                                send_ntfy_with_image(conf["ntfy_topic"], ntfy_title(ac, route), format_ntfy_message(ac, route=route, eval_failed=eval_failed, tar1090_url=conf["tar1090_url"]), image_for_ntfy)
+                            else:
+                                send_ntfy(conf["ntfy_topic"], ntfy_title(ac, route), format_ntfy_message(ac, route=route, eval_failed=eval_failed, planespotters_url=planespotters_url, tar1090_url=conf["tar1090_url"]))
                         except Exception as e:
-                            log.error("NTFY ERROR  %s — %s", label, e)
-                        if screenshot_path:
-                            try:
-                                send_ntfy_image(conf["ntfy_topic"], ntfy_title(ac, route), screenshot_path)
-                            except Exception as e:
-                                log.error("NTFY ERROR  %s — screenshot: %s", label, e)
+                            log.error("NTFY ERROR  %s - %s", label, e)
+                    if composed_path:
+                        os.unlink(composed_path)
                     if screenshot_path:
                         os.unlink(screenshot_path)
                 else:
@@ -536,7 +596,7 @@ def run(conf_path, skip_llm=False, notify_all=False):
                 kind = "timed out"
             else:
                 kind = str(reason)
-            log.warning("poll #%d — tar1090 unreachable (%s)  url=%s  streak=%d",
+            log.warning("poll #%d - tar1090 unreachable (%s)  url=%s  streak=%d",
                         poll_count, kind, conf["tar1090_url"], fail_streak)
         except Exception as e:
             fail_streak += 1
@@ -546,7 +606,7 @@ def run(conf_path, skip_llm=False, notify_all=False):
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="notify1090 — ADS-B aircraft notification bot")
+    parser = argparse.ArgumentParser(description="notify1090 - ADS-B aircraft notification bot")
     parser.add_argument("conf", nargs="?", default="conf.json", help="path to conf.json")
     parser.add_argument("--skip-llm", action="store_true",
                         help="skip Gemini evaluation but still apply the exclude_type_regex filter")

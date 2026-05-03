@@ -12,7 +12,6 @@
     "telegram_chat_id": "YOUR_TELEGRAM_CHAT_ID",
     "ntfy_topic": "",
     "screenshot": true,
-    "screenshot_zoom": 10,
-    "screenshot_icon_scale": 1.0,
+    "screenshot_params": "zoom=10&iconScale=1.0&hideSideBar&hideButtons&altitudeChart=0&screenshot",
     "screenshot_viewport": 640
 }
