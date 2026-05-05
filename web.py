@@ -167,7 +167,7 @@ function applyPhoto(td, url) {
 
 fetch("/api/entries")
   .then(r => r.json())
-  .then(data => { DATA = data; render(); });
+  .then(data => { data.reverse(); DATA = data; render(); });
 </script>
 </body>
 </html>

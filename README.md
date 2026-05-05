@@ -4,7 +4,9 @@ Minimal python script that polls a [tar1090](https://github.com/wiedehopf/tar109
 
 | Telegram Notification | NTFY Notification |
 |-|-|
-|![Telegram](https://i.imgur.com/52MeXVC.png)|![ntfy](https://i.imgur.com/blphFUS.png)|
+|![Telegram](https://i.imgur.com/j1xEXsq.png)|![ntfy](https://i.imgur.com/gRvJjQ1.png)|
+
+
 
 ## Filtering Flow
 1) Fetch all aircrafts from tar1090
@@ -55,6 +57,7 @@ python3 notify1090.py --wipe-db
 ```
 (or you just delete the `notify1090.db` sqlite file)
 
+
 ## Logs
 All output goes to stdout and `log.txt` in the working directory, and each line has the timestamp.
 
@@ -77,6 +80,16 @@ Analyzing the LLM message inside the NOTIFY and SKIP logs could be useful for ve
 ```bash
 grep "LLM REASON" log.txt
 ```
+
+By executing the following file
+```python
+python3 web.py --port 8080
+```
+it's possible to start a small web server that reads the log.txt file and prints every aircraft decision entry (NOTIFY, SKIP, EXCLUDE, EMERGENCY) in a easier way.
+
+| Log Viewer |
+|-|
+|![Log Viewer](https://i.imgur.com/pvtlIC3.png)|
 
 ## Config reference
 
