@@ -39,12 +39,12 @@ log.addHandler(_file)
 DB_PATH = "notify1090.db"
 TELEGRAM_URL = "https://api.telegram.org/bot{token}/sendMessage"
 TELEGRAM_PHOTO_URL = "https://api.telegram.org/bot{token}/sendPhoto"
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 ADSBDB_URL = "https://api.adsbdb.com/v0/callsign/{callsign}"
 PLANESPOTTERS_URL = "https://api.planespotters.net/pub/photos/hex/{hex}"
 ADSBEXCHANGE_URL = "https://globe.adsbexchange.com/?icao={hex}"
 NTFY_URL = "https://ntfy.sh/{topic}"
-UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
 
 REGISTRATION_PREFIXES = [
     ("A6-", "🇦🇪"), ("A7-", "🇶🇦"), ("A9C", "🇧🇭"),
@@ -127,6 +127,30 @@ def db_init(conn):
             first_seen INTEGER NOT NULL
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp INTEGER NOT NULL,
+            type TEXT NOT NULL,
+            hex TEXT NOT NULL,
+            callsign TEXT,
+            reg TEXT,
+            aircraft_type TEXT,
+            distance_km REAL,
+            altitude TEXT,
+            reason TEXT,
+            squawk TEXT,
+            origin_iata TEXT,
+            destination_iata TEXT,
+            airline TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS config (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
     conn.commit()
 
 def db_is_known(conn, hex_code, ttl_seconds):
@@ -142,6 +166,54 @@ def db_mark_seen(conn, hex_code):
         "INSERT OR REPLACE INTO seen_aircraft (hex, first_seen) VALUES (?, ?)",
         (hex_code, int(time.time()))
     )
+    conn.commit()
+
+def db_load_config(conn):
+    rows = conn.execute("SELECT key, value FROM config").fetchall()
+    conf = {}
+    for key, value in rows:
+        try:
+            conf[key] = json.loads(value)
+        except (json.JSONDecodeError, ValueError):
+            conf[key] = value
+    return conf
+
+def db_save_config(conn, conf):
+    for key, value in conf.items():
+        conn.execute(
+            "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
+            (key, json.dumps(value))
+        )
+    conn.commit()
+
+def db_log_notification(conn, notif_type, ac, reason=None, route=None):
+    origin_iata = dest_iata = airline = None
+    if route:
+        orig = route.get("origin") or {}
+        dest = route.get("destination") or {}
+        origin_iata = orig.get("iata_code")
+        dest_iata = dest.get("iata_code")
+        airline = (route.get("airline") or {}).get("name")
+    alt = ac.get("alt_baro", ac.get("altitude", ""))
+    conn.execute("""
+        INSERT INTO notifications
+            (timestamp, type, hex, callsign, reg, aircraft_type,
+             distance_km, altitude, reason, squawk,
+             origin_iata, destination_iata, airline)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        int(time.time()),
+        notif_type,
+        ac.get("hex", ""),
+        (ac.get("flight", "") or "").strip() or None,
+        ac.get("r") or None,
+        ac.get("t") or None,
+        ac.get("_distance_km"),
+        str(alt) if alt != "" else None,
+        reason or None,
+        ac.get("squawk") or None,
+        origin_iata, dest_iata, airline,
+    ))
     conn.commit()
 
 
@@ -172,25 +244,36 @@ def format_aircraft_text(ac):
     return "\n".join(f"{k}: {v}" for k, v in fields)
 
 
-def ask_gemini(api_key, user_prompt, aircraft_text):
-    url = GEMINI_URL + "?key=" + api_key
+def ask_openrouter(api_key, model, user_prompt, aircraft_text):
+    full_prompt = (
+        user_prompt
+        + "\n\nReply with YES or NO followed by a colon and a one-line reason. "
+        "Example: YES: military tanker. or NO: common narrowbody.\n\nAircraft data:\n"
+        + aircraft_text
+    )
     payload = {
-        "contents": [{
-            "parts": [{
-                "text": user_prompt + "\n\nReply with YES or NO followed by a colon and a one-line reason. Example: YES: military tanker. or NO: common narrowbody.\n\nAircraft data:\n" + aircraft_text
-            }]
-        }],
-        "generationConfig": {
-            "maxOutputTokens": 40,
-            "temperature": 0
-        }
+        "model": model,
+        "messages": [{"role": "user", "content": full_prompt}],
+        "max_tokens": 40,
+        "temperature": 0,
     }
-    resp = http_post_json(url, payload, timeout=30)
-    raw = resp["candidates"][0]["content"]["parts"][0]["text"].strip()
-    upper = raw.upper()
-    interesting = upper.startswith("YES")
-    reason = raw[raw.find(":")+1:].strip() if ":" in raw else ""
-    return interesting, reason
+    for attempt in range(3):
+        try:
+            resp = http_post_json(
+                OPENROUTER_URL,
+                payload,
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=30,
+            )
+            raw = resp["choices"][0]["message"]["content"].strip()
+            interesting = raw.upper().startswith("YES")
+            reason = raw[raw.find(":")+1:].strip() if ":" in raw else ""
+            return interesting, reason
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+                continue
+            raise
 
 
 def send_telegram(bot_token, chat_id, text):
@@ -423,45 +506,68 @@ def load_conf(path):
     with open(path) as f:
         return json.load(f)
 
-def run(conf_path, skip_llm=False, notify_all=False):
-    conf = load_conf(conf_path)
-
-    use_telegram = bool(conf.get("telegram_bot_token") and conf.get("telegram_chat_id"))
-    use_ntfy = bool(conf.get("ntfy_topic"))
-    if not use_telegram and not use_ntfy:
-        log.error("no notification channel configured - set telegram_bot_token/telegram_chat_id or ntfy_topic")
-        sys.exit(1)
-    channels = " + ".join(filter(None, ["telegram" if use_telegram else None, "ntfy" if use_ntfy else None]))
-
+def run(conf_path="conf.json", skip_llm=False, notify_all=False):
     conn = sqlite3.connect(DB_PATH)
     db_init(conn)
 
-    use_screenshot = bool(conf.get("screenshot", True))
-    sc_params   = conf.get("screenshot_params", "zoom=10&iconScale=1.0&hideSideBar&hideButtons&altitudeChart=0&screenshot")
-    sc_viewport = int(conf.get("screenshot_viewport", 640))
+    # Bootstrap config from conf.json into DB if the table is empty
+    if conn.execute("SELECT COUNT(*) FROM config").fetchone()[0] == 0:
+        if os.path.exists(conf_path):
+            db_save_config(conn, load_conf(conf_path))
+            log.info("bootstrapped config from %s into database", conf_path)
+        else:
+            log.error("config table is empty and %s not found — cannot start", conf_path)
+            sys.exit(1)
 
-    if use_screenshot and not HAS_PLAYWRIGHT:
+    if not HAS_PLAYWRIGHT:
         log.warning("playwright not installed - tar1090 screenshots disabled. Run: pip install playwright && playwright install chromium")
-    if use_screenshot and not HAS_PILLOW:
+    if not HAS_PILLOW:
         log.warning("pillow not installed - composed image disabled. Run: pip install pillow")
 
     mode_tag = "  [notify-all]" if notify_all else ("  [skip-llm]" if skip_llm else "")
-    log.info("started - tar1090=%s  radius=%d km  interval=%ds  channels=%s%s",
-             conf["tar1090_url"], conf["radius_km"], conf["poll_interval_seconds"],
-             channels, mode_tag)
-
-    ttl_seconds = int(conf.get("seen_ttl_hours", 1) * 3600)
-    log.info("TTL: aircraft re-evaluated after %dm", ttl_seconds // 60)
-
-    exclude_pattern = None
-    if conf.get("exclude_type_regex"):
-        exclude_pattern = re.compile(conf["exclude_type_regex"], re.IGNORECASE)
-        log.info("exclude regex: %s", conf["exclude_type_regex"])
 
     poll_count = 0
     fail_streak = 0
     while True:
         poll_count += 1
+
+        # Reload config from DB every poll so web UI changes take effect immediately
+        conf = db_load_config(conn)
+
+        required = ["tar1090_url", "latitude", "longitude", "radius_km", "poll_interval_seconds"]
+        missing = [k for k in required if k not in conf]
+        if missing:
+            log.error("missing required config keys: %s — fix in web UI Settings", missing)
+            time.sleep(10)
+            continue
+
+        use_telegram = bool(conf.get("telegram_bot_token") and conf.get("telegram_chat_id"))
+        use_ntfy = bool(conf.get("ntfy_topic"))
+        if not use_telegram and not use_ntfy:
+            log.warning("poll #%d — no notification channel configured (set telegram or ntfy in Settings)", poll_count)
+            time.sleep(int(conf.get("poll_interval_seconds") or 60))
+            continue
+
+        use_screenshot = bool(conf.get("screenshot", True))
+        sc_params   = conf.get("screenshot_params", "zoom=10&iconScale=1.0&hideSideBar&hideButtons&altitudeChart=0&screenshot")
+        sc_viewport = int(conf.get("screenshot_viewport") or 640)
+        ttl_seconds = int(float(conf.get("seen_ttl_hours") or 1) * 3600)
+
+        exclude_pattern = None
+        raw_regex = conf.get("exclude_type_regex", "")
+        if raw_regex:
+            try:
+                exclude_pattern = re.compile(raw_regex, re.IGNORECASE)
+            except re.error as exc:
+                log.warning("invalid exclude_type_regex '%s': %s", raw_regex, exc)
+
+        if poll_count == 1:
+            channels = " + ".join(filter(None, ["telegram" if use_telegram else None, "ntfy" if use_ntfy else None]))
+            log.info("started - tar1090=%s  radius=%d km  interval=%ds  channels=%s%s",
+                     conf["tar1090_url"], conf["radius_km"], conf["poll_interval_seconds"],
+                     channels, mode_tag)
+            log.info("TTL: aircraft re-evaluated after %dm", ttl_seconds // 60)
+
         try:
             aircraft_list = fetch_aircraft(conf["tar1090_url"])
             nearby = filter_nearby(aircraft_list, conf["latitude"], conf["longitude"], conf["radius_km"])
@@ -494,6 +600,7 @@ def run(conf_path, skip_llm=False, notify_all=False):
                     route = fetch_flightroute(callsign) if callsign != "?" else None
                     screenshot_path = take_tar1090_screenshot(conf["tar1090_url"], hex_code, sc_params, sc_viewport) if use_screenshot else None
                     composed_path = compose_images(planespotters_url, screenshot_path) if (planespotters_url and screenshot_path) else None
+                    db_log_notification(conn, "EMERGENCY", ac, reason=log_label, route=route)
                     if use_telegram:
                         try:
                             if composed_path:
@@ -528,6 +635,7 @@ def run(conf_path, skip_llm=False, notify_all=False):
                 if not notify_all and exclude_pattern and exclude_pattern.match(ac.get("t", "")):
                     log.info("EXCLUDE  %s", label)
                     db_mark_seen(conn, hex_code)
+                    db_log_notification(conn, "EXCLUDE", ac)
                     continue
 
                 db_mark_seen(conn, hex_code)
@@ -539,15 +647,12 @@ def run(conf_path, skip_llm=False, notify_all=False):
                     interesting = True
                 else:
                     try:
-                        interesting, reason = ask_gemini(conf["gemini_api_key"], conf["prompt"], ac_text)
+                        model = conf.get("openrouter_model") or "google/gemini-2.5-flash"
+                        interesting, reason = ask_openrouter(conf["openrouter_api_key"], model, conf["prompt"], ac_text)
                     except Exception as e:
-                        log.error("GEMINI ERROR  %s - %s  retrying...", label, e)
-                        try:
-                            interesting, reason = ask_gemini(conf["gemini_api_key"], conf["prompt"], ac_text)
-                        except Exception as e2:
-                            log.error("GEMINI RETRY FAILED  %s - %s  sending anyway", label, e2)
-                            interesting = True
-                            eval_failed = True
+                        log.error("LLM ERROR  %s - %s  sending anyway", label, e)
+                        interesting = True
+                        eval_failed = True
 
                 if interesting:
                     planespotters_url = fetch_planespotters_url(hex_code)
@@ -555,6 +660,7 @@ def run(conf_path, skip_llm=False, notify_all=False):
                     screenshot_path = take_tar1090_screenshot(conf["tar1090_url"], hex_code, sc_params, sc_viewport) if use_screenshot else None
                     composed_path = compose_images(planespotters_url, screenshot_path) if (planespotters_url and screenshot_path) else None
                     log.info("NOTIFY  %s%s", label, f"  LLM REASON: {reason}" if reason else "")
+                    db_log_notification(conn, "NOTIFY", ac, reason=reason, route=route)
                     if use_telegram:
                         try:
                             if composed_path:
@@ -586,6 +692,7 @@ def run(conf_path, skip_llm=False, notify_all=False):
                         os.unlink(screenshot_path)
                 else:
                     log.info("SKIP  %s%s", label, f"  LLM REASON: {reason}" if reason else "")
+                    db_log_notification(conn, "SKIP", ac, reason=reason)
 
         except urllib.error.URLError as e:
             fail_streak += 1
@@ -602,14 +709,14 @@ def run(conf_path, skip_llm=False, notify_all=False):
             fail_streak += 1
             log.exception("poll #%d — unexpected error (streak=%d)", poll_count, fail_streak)
 
-        time.sleep(conf["poll_interval_seconds"])
+        time.sleep(int(conf.get("poll_interval_seconds") or 60))
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="notify1090 - ADS-B aircraft notification bot")
     parser.add_argument("conf", nargs="?", default="conf.json", help="path to conf.json")
     parser.add_argument("--skip-llm", action="store_true",
-                        help="skip Gemini evaluation but still apply the exclude_type_regex filter")
+                        help="skip LLM evaluation but still apply the exclude_type_regex filter")
     parser.add_argument("--notify-all", action="store_true",
                         help="notify every never-seen-before aircraft in radius")
     parser.add_argument("--wipe-db", action="store_true",

@@ -6,3 +6,5 @@ log.txt
 log_evaluation_prompt.txt
 *.png
 venv
+test.py
+upload.sh
